@@ -92,7 +92,7 @@ def test_persistent_resume_inherits_persistent_mode(coi_binary, cleanup_containe
             text=True,
             shell=False,
         )
-        assert container_name in result.stdout, f"Container should still exist (inherited persistent mode)"
+        assert container_name in result.stdout, "Container should still exist (inherited persistent mode)"
 
         # Cleanup
         subprocess.run(

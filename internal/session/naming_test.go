@@ -88,13 +88,13 @@ func TestContainerName(t *testing.T) {
 			name:          "slot 1",
 			workspacePath: "/home/user/project",
 			slot:          1,
-			wantPrefix:    "claude-",
+			wantPrefix:    "coi-",
 		},
 		{
 			name:          "slot 5",
 			workspacePath: "/home/user/project",
 			slot:          5,
-			wantPrefix:    "claude-",
+			wantPrefix:    "coi-",
 		},
 	}
 
@@ -107,9 +107,9 @@ func TestContainerName(t *testing.T) {
 				t.Errorf("ContainerName() = %s, want prefix %s", name, tt.wantPrefix)
 			}
 
-			// Check format: claude-<hash>-<slot>
+			// Check format: coi-<hash>-<slot>
 			expectedHash := WorkspaceHash(tt.workspacePath)
-			expectedName := fmt.Sprintf("claude-%s-%d", expectedHash, tt.slot)
+			expectedName := fmt.Sprintf("coi-%s-%d", expectedHash, tt.slot)
 
 			if name != expectedName {
 				t.Errorf("ContainerName() = %s, want %s", name, expectedName)
@@ -139,8 +139,8 @@ func TestContainerNameDifferentSlots(t *testing.T) {
 
 	// Check that only the slot number differs
 	hash := WorkspaceHash(path)
-	expected1 := fmt.Sprintf("claude-%s-1", hash)
-	expected2 := fmt.Sprintf("claude-%s-2", hash)
+	expected1 := fmt.Sprintf("coi-%s-1", hash)
+	expected2 := fmt.Sprintf("coi-%s-2", hash)
 
 	if name1 != expected1 {
 		t.Errorf("ContainerName(slot 1) = %s, want %s", name1, expected1)
@@ -161,14 +161,14 @@ func TestParseContainerName(t *testing.T) {
 	}{
 		{
 			name:          "valid container name",
-			containerName: "claude-abc12345-1",
+			containerName: "coi-abc12345-1",
 			wantHash:      "abc12345",
 			wantSlot:      1,
 			wantErr:       false,
 		},
 		{
 			name:          "valid container name slot 10",
-			containerName: "claude-abc12345-10",
+			containerName: "coi-abc12345-10",
 			wantHash:      "abc12345",
 			wantSlot:      10,
 			wantErr:       false,

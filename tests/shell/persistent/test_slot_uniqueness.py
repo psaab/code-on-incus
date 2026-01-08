@@ -8,7 +8,6 @@ This is a safety check to ensure good test hygiene.
 """
 
 import ast
-import os
 from pathlib import Path
 
 
@@ -31,7 +30,7 @@ def test_all_persistent_tests_use_unique_slots():
     slots_by_file = {}
 
     for test_file in test_files:
-        with open(test_file, 'r') as f:
+        with open(test_file) as f:
             content = f.read()
 
         # Parse the Python file
@@ -45,22 +44,19 @@ def test_all_persistent_tests_use_unique_slots():
         slots = []
         for node in ast.walk(tree):
             # Look for spawn_coi calls with --slot=N
-            if isinstance(node, ast.Call):
-                # Check if this is a spawn_coi call
-                if (isinstance(node.func, ast.Name) and node.func.id == 'spawn_coi') or \
-                   (isinstance(node.func, ast.Attribute) and node.func.attr == 'spawn_coi'):
-                    # Look through arguments for list containing slot specification
-                    for arg in node.args:
-                        if isinstance(arg, ast.List):
-                            for elt in arg.elts:
-                                if isinstance(elt, ast.Constant) and isinstance(elt.value, str):
-                                    if '--slot=' in elt.value:
-                                        slot_str = elt.value.split('--slot=')[1]
-                                        try:
-                                            slot_num = int(slot_str)
-                                            slots.append(slot_num)
-                                        except ValueError:
-                                            pass
+            if isinstance(node, ast.Call) and ((isinstance(node.func, ast.Name) and node.func.id == 'spawn_coi') or \
+                   (isinstance(node.func, ast.Attribute) and node.func.attr == 'spawn_coi')):
+                # Look through arguments for list containing slot specification
+                for arg in node.args:
+                    if isinstance(arg, ast.List):
+                        for elt in arg.elts:
+                            if isinstance(elt, ast.Constant) and isinstance(elt.value, str) and '--slot=' in elt.value:
+                                slot_str = elt.value.split('--slot=')[1]
+                                try:
+                                    slot_num = int(slot_str)
+                                    slots.append(slot_num)
+                                except ValueError:
+                                    pass
 
         if slots:
             slots_by_file[test_file.name] = sorted(set(slots))
@@ -99,7 +95,7 @@ def test_all_persistent_tests_use_unique_slots():
             conflicts.append(f"Slot {dup_slot} used in: {', '.join(files_using_slot)}")
 
         conflict_msg = "\n  ".join(conflicts)
-        assert False, f"Duplicate slot assignments found:\n  {conflict_msg}"
+        raise AssertionError(f"Duplicate slot assignments found:\n  {conflict_msg}")
 
     print(f"\n✓ All {len(all_slots)} slot assignments are unique across {len(slots_by_file)} test files")
     print(f"  Slots used: {sorted(unique_slots)}")
@@ -121,7 +117,7 @@ def test_slot_assignments_are_reasonable():
     all_slots = []
 
     for test_file in test_files:
-        with open(test_file, 'r') as f:
+        with open(test_file) as f:
             content = f.read()
 
         try:

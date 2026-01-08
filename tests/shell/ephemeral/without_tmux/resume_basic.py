@@ -38,7 +38,7 @@ def test_basic_resume_works(coi_binary, cleanup_containers, workspace_dir):
     wait_for_container_ready(child)
     wait_for_prompt(child)
 
-    with with_live_screen(child) as monitor:
+    with with_live_screen(child):
         time.sleep(2)
         # Exit quickly - we just need to create a session
         clean_exit = exit_claude(child)

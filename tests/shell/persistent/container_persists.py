@@ -59,7 +59,7 @@ def test_persistent_container_not_deleted(coi_binary, cleanup_containers, worksp
     )
 
     assert container_name in result.stdout, f"Container {container_name} was deleted (persistent mode should keep it)"
-    assert "STOPPED" in result.stdout or "Stopped" in result.stdout, f"Container should be stopped"
+    assert "STOPPED" in result.stdout or "Stopped" in result.stdout, "Container should be stopped"
 
     # Cleanup
     subprocess.run(

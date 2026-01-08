@@ -181,7 +181,7 @@ func TestGetConfigPaths(t *testing.T) {
 
 	// Check that paths are in expected order
 	expectedPaths := []string{
-		"/etc/claude-on-incus/config.toml",
+		"/etc/coi/config.toml",
 	}
 
 	for i, expected := range expectedPaths {
@@ -192,7 +192,7 @@ func TestGetConfigPaths(t *testing.T) {
 
 	// Check that user config path contains .config
 	homeDir, _ := os.UserHomeDir()
-	expectedUserPath := filepath.Join(homeDir, ".config/claude-on-incus/config.toml")
+	expectedUserPath := filepath.Join(homeDir, ".config/coi/config.toml")
 	if paths[1] != expectedUserPath {
 		t.Errorf("User config path: expected %q, got %q", expectedUserPath, paths[1])
 	}

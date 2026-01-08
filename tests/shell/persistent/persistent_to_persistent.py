@@ -56,7 +56,7 @@ def test_persistent_to_persistent_reuses_container(coi_binary, cleanup_container
         shell=False,
     )
     assert container_name in result.stdout, f"Container {container_name} should exist"
-    assert "STOPPED" in result.stdout, f"Container should be stopped"
+    assert "STOPPED" in result.stdout, "Container should be stopped"
 
     # Get UUID before second session
     uuid_before = subprocess.run(
