@@ -274,7 +274,7 @@ Settings are loaded in order (highest precedence last):
 5. Environment variables (`CLAUDE_ON_INCUS_*`)
 6. CLI flags (`--persistent`, etc.)
 
-**See [PERSISTENT_MODE.md](PERSISTENT_MODE.md) for detailed persistent mode configuration.**
+**See the configuration section below for detailed persistent mode configuration.**
 
 ## Persistent Mode
 
@@ -320,8 +320,6 @@ coi shell --persistent
 > which jq     # ✅ /usr/bin/jq (no reinstall needed)
 > npm test     # ✅ node_modules already present
 ```
-
-**See [PERSISTENT_MODE.md](PERSISTENT_MODE.md) for complete guide.**
 
 ## Architecture
 
@@ -421,6 +419,8 @@ Maciej Mensfeld ([@mensfeld](https://github.com/mensfeld))
 
 ## See Also
 
+- [CHANGELOG](CHANGELOG.md) - Version history and release notes
+- [Integration Tests](INTE.md) - Comprehensive E2E testing documentation (215 test cases)
 - [ClaudeYard](https://github.com/mensfeld/claude_yard) - Workflow automation using claude-on-incus
 - [claudebox](https://github.com/RchGrav/claudebox) - Docker-based alternative
 - [Incus](https://linuxcontainers.org/incus/) - Linux container manager

@@ -1,6 +1,6 @@
-# Binaries
-coi
-claude-on-incus
+# Binaries (in root only)
+/coi
+/claude-on-incus
 *.exe
 *.dll
 *.so
