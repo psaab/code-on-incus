@@ -80,7 +80,6 @@ func infoCommand(cmd *cobra.Command, args []string) error {
 		fmt.Printf("Saved At:       %s\n", metadata.SavedAt)
 	}
 
-	fmt.Printf("Privileged:     %t\n", metadata.Privileged)
 	fmt.Printf("Session Data:   ")
 	if claudeExists {
 		fmt.Printf("✓ Present (.claude directory)\n")

@@ -246,8 +246,7 @@ func imageListCommand(cmd *cobra.Command, args []string) error {
 		description string
 		buildCmd    string
 	}{
-		{"coi-sandbox", "Standard sandbox image (Claude CLI, Node.js, Docker, tmux)", "coi build sandbox"},
-		{"coi-privileged", "Privileged image with Git/SSH/GitHub CLI", "coi build privileged"},
+		{"coi", "coi image (Claude CLI, Node.js, Docker, GitHub CLI, tmux)", "coi build"},
 	}
 
 	fmt.Println("COI Images:")

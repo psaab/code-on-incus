@@ -422,6 +422,74 @@ sudo systemctl start incus
 - TOML-based configuration with profiles
 - Comprehensive integration test suite (54 tests passing)
 
+## Container Lifecycle & Session Persistence
+
+Understanding how containers and sessions work in `coi`:
+
+### How It Works Internally
+
+1. **Containers are always launched as non-ephemeral** (persistent in Incus terms)
+   - This allows saving session data even if the container is stopped from within (e.g., `sudo shutdown 0`)
+   - Session data can be pulled from stopped containers, but not from deleted ones
+
+2. **Inside the container**: `tmux` → `bash` → `claude`
+   - When claude exits, you're dropped to bash
+   - From bash you can: type `exit`, press `Ctrl+b d` to detach, or run `sudo shutdown 0`
+
+3. **On cleanup** (when you exit/detach):
+   - Session data (`.claude` directory) is **always** saved to `~/.coi/sessions/`
+   - If `--persistent` was NOT set: container is deleted after saving
+   - If `--persistent` was set: container is kept for reuse
+
+### What Gets Preserved
+
+| Mode | Workspace Files | Claude Session | Container State |
+|------|----------------|----------------|-----------------|
+| **Default (ephemeral)** | Always saved | Always saved | Deleted |
+| **`--persistent`** | Always saved | Always saved | Kept |
+
+### Session vs Container Persistence
+
+- **`--resume`**: Restores the **Claude conversation** in a fresh container
+  - Use when you want to continue a conversation but don't need installed packages
+  - Container is recreated, only `.claude` session data is restored
+
+- **`--persistent`**: Keeps the **entire container** with all modifications
+  - Use when you've installed tools, built artifacts, or modified the environment
+  - `coi attach` reconnects to the same container with everything intact
+
+### Stopping Containers
+
+From **inside** the container:
+- `exit` in bash → saves session, then deletes container (or keeps if `--persistent`)
+- `Ctrl+b d` → detaches, saves session, container stays running
+- `sudo shutdown 0` → stops container, session is saved, then container is deleted (or kept if `--persistent`)
+
+From **outside** (host):
+- `coi shutdown <name>` → graceful stop with session save, then delete
+- `coi shutdown --timeout=30 <name>` → graceful stop with 30s timeout
+- `coi kill <name>` → force stop and delete immediately
+- `coi kill --all` → force stop and delete all containers
+
+### Example Workflows
+
+**Quick task (default mode):**
+```bash
+coi shell                    # Start session
+# ... work with claude ...
+exit                         # Exit bash → session saved, container deleted
+coi shell --resume           # Continue conversation in fresh container
+```
+
+**Long-running project (`--persistent`):**
+```bash
+coi shell --persistent       # Start persistent session
+# ... install tools, build things ...
+# Press Ctrl+b d to detach
+coi attach                   # Reconnect to same container with all tools
+coi shutdown --all           # When done, clean up
+```
+
 ## License
 
 MIT

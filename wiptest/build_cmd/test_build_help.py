@@ -2,7 +2,7 @@
 Test build subcommand with end-to-end functionality.
 
 Flow:
-1. Check if coi-sandbox image exists
+1. Check if coi image exists
 2. If not, attempt to build it (or skip test if takes too long)
 3. If exists, verify we can launch container from it
 4. Clean up test container
@@ -17,23 +17,23 @@ import subprocess
 import time
 
 
-def test_build_sandbox_functionality(coi_binary, cleanup_containers):
-    """Test that coi build sandbox works end-to-end."""
-    # Check if coi-sandbox already exists
+def test_build_coi_functionality(coi_binary, cleanup_containers):
+    """Test that coi build works end-to-end."""
+    # Check if coi already exists
     result = subprocess.run(
-        [coi_binary, "image", "exists", "coi-sandbox"],
+        [coi_binary, "image", "exists", "coi"],
         capture_output=True,
     )
 
     if result.returncode == 0:
         # Image exists, verify we can use it
-        print("coi-sandbox image exists, verifying it's usable...")
+        print("coi image exists, verifying it's usable...")
 
         # Try to launch a container from it
-        test_container = "coi-test-sandbox-verify"
+        test_container = "coi-test-verify"
 
         launch_result = subprocess.run(
-            [coi_binary, "container", "launch", "coi-sandbox", test_container],
+            [coi_binary, "container", "launch", "coi", test_container],
             capture_output=True,
             text=True,
             timeout=30,
@@ -47,16 +47,16 @@ def test_build_sandbox_functionality(coi_binary, cleanup_containers):
                 capture_output=True,
                 timeout=10,
             )
-            assert True, "coi-sandbox image is usable"
+            assert True, "coi image is usable"
         else:
-            assert False, f"Failed to launch container from coi-sandbox: {launch_result.stderr}"
+            assert False, f"Failed to launch container from coi: {launch_result.stderr}"
 
     else:
         # Image doesn't exist, try to build it
-        print("coi-sandbox not found, attempting to build (this may take several minutes)...")
+        print("coi not found, attempting to build (this may take several minutes)...")
 
         build_result = subprocess.run(
-            [coi_binary, "build", "sandbox"],
+            [coi_binary, "build"],
             capture_output=True,
             text=True,
             timeout=600,  # 10 minute timeout for build
@@ -64,20 +64,20 @@ def test_build_sandbox_functionality(coi_binary, cleanup_containers):
 
         if build_result.returncode == 0:
             # Build succeeded
-            print("Successfully built coi-sandbox image")
+            print("Successfully built coi image")
 
             # Verify image now exists
             exists_result = subprocess.run(
-                [coi_binary, "image", "exists", "coi-sandbox"],
+                [coi_binary, "image", "exists", "coi"],
                 capture_output=True,
             )
             assert exists_result.returncode == 0, "Built image should exist after successful build"
 
             # Try to launch a test container to verify it works
-            test_container = "coi-test-sandbox-verify"
+            test_container = "coi-test-verify"
 
             launch_result = subprocess.run(
-                [coi_binary, "container", "launch", "coi-sandbox", test_container],
+                [coi_binary, "container", "launch", "coi", test_container],
                 capture_output=True,
                 text=True,
                 timeout=30,
@@ -100,16 +100,16 @@ def test_build_sandbox_functionality(coi_binary, cleanup_containers):
 
             if "not found" in error_output.lower() or "not available" in error_output.lower():
                 import pytest
-                pytest.skip("Base image not available for building sandbox")
+                pytest.skip("Base image not available for building coi")
             else:
                 assert False, f"Build failed unexpectedly: {error_output}"
 
 
 def test_build_handles_existing_image(coi_binary):
     """Test that build command handles existing images correctly."""
-    # Try to build sandbox (if it exists, should skip or warn)
+    # Try to build coi (if it exists, should skip or warn)
     result = subprocess.run(
-        [coi_binary, "build", "sandbox"],
+        [coi_binary, "build"],
         capture_output=True,
         text=True,
         timeout=30,  # Should be quick if image exists

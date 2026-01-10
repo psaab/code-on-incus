@@ -4,7 +4,7 @@ Test images command with full output format validation.
 Expected:
 - Command runs without errors
 - Output shows COI images section
-- Output shows coi-sandbox and coi-privileged status (built or not built)
+- Output shows coi image status (built or not built)
 - Output shows remote images section
 - Output format is properly structured
 """
@@ -30,12 +30,9 @@ def test_images_command_basic(coi_binary):
     assert "coi" in output_lower or "image" in output_lower, \
         "Output should mention images"
 
-    # Should list the two core COI images
-    assert "coi-sandbox" in output or "sandbox" in output_lower, \
-        "Output should mention coi-sandbox image"
-
-    assert "coi-privileged" in output or "privileged" in output_lower, \
-        "Output should mention coi-privileged image"
+    # Should list the core COI image
+    assert "coi" in output, \
+        "Output should mention coi image"
 
     # Should indicate build status (built, not built, or checkmarks)
     has_status_indicator = any(indicator in output_lower for indicator in [

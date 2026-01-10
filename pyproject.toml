@@ -37,9 +37,12 @@ quote-style = "double"
 indent-style = "space"
 
 [tool.pytest.ini_options]
-# These are already in pytest.ini, but can also be here
 testpaths = ["tests"]
 python_files = "*.py"
 python_classes = "Test*"
 python_functions = "test_*"
 norecursedirs = ["tests/support"]
+# Add tests dir to pythonpath so imports work without __init__.py
+pythonpath = ["tests"]
+# Disable cache to avoid __pycache__ directories
+addopts = "-p no:cacheprovider"

@@ -32,7 +32,7 @@ class TerminalEmulator:
     - Screen clearing
     """
 
-    def __init__(self, columns=80, lines=24, verbose=False, show_screen_updates=None):
+    def __init__(self, columns=80, lines=20, verbose=False, show_screen_updates=None):
         if not HAS_PYTE:
             raise ImportError(
                 "pyte is required for terminal emulation. Install with: pip install pyte"
@@ -52,6 +52,7 @@ class TerminalEmulator:
         self.last_screen_hash = None
         self.update_counter = 0
         self.feed_counter = 0  # Count feeds for periodic updates
+        self.last_print_time = 0  # For debouncing prints
 
         # Debug: Show we're initialized
         if verbose:
@@ -80,9 +81,9 @@ class TerminalEmulator:
         if self.verbose:
             print(data, end="", flush=True)
 
-        # Show screen updates if enabled (check after each feed)
+        # Show screen updates if enabled (only when screen meaningfully changes)
         if self.show_screen_updates:
-            self._maybe_print_screen(force_every_n_feeds=10)
+            self._maybe_print_screen()
 
     def write(self, data):
         """Alias for feed() to match file-like interface."""
@@ -104,38 +105,31 @@ class TerminalEmulator:
         """Get the raw output (with ANSI codes)."""
         return "".join(self.raw_output)
 
-    def _maybe_print_screen(self, force_every_n_feeds=None):
+    def _maybe_print_screen(self):
         """
-        Print the current screen state if it has changed.
+        Print the current screen state if it has changed meaningfully.
 
-        Args:
-            force_every_n_feeds: If set, force print every N feeds even if screen unchanged
+        Uses debouncing to avoid printing too rapidly during data streaming.
         """
+        import time as _time
+
         self.feed_counter += 1
         current_display = self.get_display_stripped()
         current_hash = hash(current_display)
 
         # Check if we should print
-        should_print = False
-        force_reason = None
+        # Only print if screen changed AND enough time passed (debounce)
+        now = _time.time()
+        time_since_last = now - self.last_print_time
 
-        if current_hash != self.last_screen_hash:
-            # Screen changed
-            should_print = True
+        if current_hash != self.last_screen_hash and time_since_last >= 0.3:
+            # Screen changed and debounce passed
             self.last_screen_hash = current_hash
-        elif force_every_n_feeds and self.feed_counter % force_every_n_feeds == 0:
-            # Force periodic update
-            should_print = True
-            force_reason = f"(periodic update, feed #{self.feed_counter})"
-
-        if should_print:
+            self.last_print_time = now
             self.update_counter += 1
 
             print(f"\n\n{'=' * 80}")
-            if force_reason:
-                print(f"SCREEN UPDATE #{self.update_counter} {force_reason}")
-            else:
-                print(f"SCREEN UPDATE #{self.update_counter} (pyte rendered view)")
+            print(f"SCREEN UPDATE #{self.update_counter}")
             print(f"{'=' * 80}")
             print(current_display)
             print(f"{'=' * 80}\n")
@@ -181,7 +175,7 @@ def spawn_coi(
         verbose = os.environ.get("COI_TEST_VERBOSE", "0") == "1"
 
     # Check show_screen_updates mode
-    # Default to False now that we have LiveScreenMonitor for async updates
+    # Enable via COI_TEST_SHOW_SCREEN env var
     if show_screen_updates is None:
         show_screen_updates = os.environ.get("COI_TEST_SHOW_SCREEN", "0") == "1"
 
@@ -193,13 +187,13 @@ def spawn_coi(
         env=env,
         cwd=cwd,
         encoding="utf-8",
-        dimensions=(24, 80),  # Set terminal size
+        dimensions=(20, 80),  # Set terminal size
     )
 
     # Enable logging with terminal emulator or basic capture
     if use_terminal_emulator and HAS_PYTE:
         child.logfile_read = TerminalEmulator(
-            columns=80, lines=24, verbose=verbose, show_screen_updates=show_screen_updates
+            columns=80, lines=20, verbose=verbose, show_screen_updates=show_screen_updates
         )
     else:
         if use_terminal_emulator:
@@ -253,26 +247,19 @@ def wait_for_prompt(child, timeout=90):
 
     Automatically uses terminal emulator if available, otherwise falls back to raw expect().
     """
-    # Try terminal emulator approach first
+    # Check for any valid prompt: real Claude shows "Tips for getting started", fake-claude shows "You:"
+    prompt_patterns = ["Tips for getting started", "You:", "bypass"]
+
     if isinstance(child.logfile_read, TerminalEmulator):
+        # Use screen-based detection - check for any prompt pattern
         try:
-            wait_for_text_on_screen(child, "Tips for getting started", timeout=timeout)
+            wait_for_any_text_on_screen(child, prompt_patterns, timeout=timeout)
             return True
         except TimeoutError:
-            # Try alternative prompt
-            try:
-                wait_for_text_on_screen(child, "You:", timeout=5)
-                return True
-            except TimeoutError:
-                # When resuming, old conversation fills screen - check for bypass button
-                try:
-                    wait_for_text_on_screen(child, "bypass", timeout=5)
-                    return True
-                except TimeoutError:
-                    display = child.logfile_read.get_display_stripped()
-                    raise TimeoutError(
-                        f"Timeout waiting for prompt.\n\nScreen display:\n{display}"
-                    ) from None
+            display = child.logfile_read.get_display_stripped()
+            raise TimeoutError(
+                f"Timeout waiting for prompt.\n\nScreen display:\n{display}"
+            ) from None
     else:
         # Fallback to raw expect() for non-emulator mode
         patterns = [r"Tips for getting started", r"You:", TIMEOUT]
@@ -458,6 +445,29 @@ def exit_claude(child, timeout=60, use_ctrl_c=False):
         child.kill(9)
         child.close(force=True)  # Force close after kill
         return False
+
+
+def wait_for_specific_container_deletion(container_name, timeout=30, poll_interval=0.5):
+    """
+    Wait for a specific container to be deleted.
+
+    Args:
+        container_name: Exact container name to wait for
+        timeout: Maximum time to wait in seconds (default: 30)
+        poll_interval: How often to check in seconds (default: 0.5)
+
+    Returns:
+        True if container deleted, False if timeout
+    """
+    start_time = time.time()
+
+    while time.time() - start_time < timeout:
+        containers = get_container_list()
+        if container_name not in containers:
+            return True
+        time.sleep(poll_interval)
+
+    return False
 
 
 def wait_for_container_deletion(prefix="coi-test-", timeout=30, poll_interval=0.5):
@@ -805,6 +815,50 @@ def wait_for_text_on_screen(child, text, timeout=30, poll_interval=0.1):
     raise TimeoutError(error_msg)
 
 
+def wait_for_any_text_on_screen(child, texts, timeout=30, poll_interval=0.1):
+    """
+    Wait for any of the given texts to appear on the rendered terminal screen.
+
+    Args:
+        child: pexpect.spawn object with TerminalEmulator as logfile_read
+        texts: List of text strings to search for
+        timeout: Timeout in seconds
+        poll_interval: How often to check the screen (seconds)
+
+    Returns:
+        The text that was found
+
+    Raises:
+        TimeoutError: If none of the texts found within timeout
+        TypeError: If logfile_read is not a TerminalEmulator
+    """
+    if not isinstance(child.logfile_read, TerminalEmulator):
+        raise TypeError(
+            "wait_for_any_text_on_screen requires TerminalEmulator."
+        )
+
+    start_time = time.time()
+
+    while time.time() - start_time < timeout:
+        try:
+            child.read_nonblocking(size=4096, timeout=poll_interval)
+        except TIMEOUT:
+            pass
+        except EOF:
+            break
+
+        display = child.logfile_read.get_display_stripped()
+
+        for text in texts:
+            if text in display:
+                return text
+
+    display = child.logfile_read.get_display_stripped()
+    raise TimeoutError(
+        f"Timeout waiting for any of {texts} on screen.\n\nCurrent display:\n{display}"
+    )
+
+
 def wait_for_pattern_on_screen(child, pattern, timeout=30, poll_interval=0.1):
     """
     Wait for a regex pattern to match on the rendered terminal screen.
@@ -980,13 +1034,9 @@ class LiveScreenMonitor:
                 if isinstance(self.child.logfile_read, TerminalEmulator):
                     current_display = self.child.logfile_read.get_display_stripped()
 
-                    # Only print if screen changed
+                    # Only update last_display if screen changed
+                    # (screen printing is handled by TerminalEmulator._maybe_print_screen)
                     if current_display != self.last_display:
-                        # Clear screen and show new content
-                        print("\033[2J\033[H", end="", file=sys.stderr)  # Clear screen
-                        print(current_display, file=sys.stderr)
-                        sys.stderr.flush()
-
                         self.last_display = current_display
 
                 time.sleep(self.update_interval)

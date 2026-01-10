@@ -4,13 +4,18 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"regexp"
 
 	"github.com/mensfeld/claude-on-incus/internal/container"
+	"github.com/mensfeld/claude-on-incus/internal/session"
 	"github.com/spf13/cobra"
 )
 
 var (
 	attachWithBash bool
+	attachSlot     int
+	attachWorkspace string
 )
 
 var attachCmd = &cobra.Command{
@@ -24,6 +29,7 @@ If only one session is running, attaches to it automatically.
 Examples:
   coi attach                    # List sessions or auto-attach if only one
   coi attach claude-abc123-1    # Attach to specific session
+  coi attach --slot=1           # Attach to slot 1 for current workspace
   coi attach --bash             # Attach to bash shell instead of tmux session
   coi attach coi-123 --bash     # Attach to specific container with bash`,
 	RunE: attachCommand,
@@ -31,54 +37,78 @@ Examples:
 
 func init() {
 	attachCmd.Flags().BoolVar(&attachWithBash, "bash", false, "Attach to bash shell instead of tmux session")
+	attachCmd.Flags().IntVar(&attachSlot, "slot", 0, "Slot number to attach to (requires workspace context)")
+	attachCmd.Flags().StringVarP(&attachWorkspace, "workspace", "w", ".", "Workspace directory (for --slot)")
 	rootCmd.AddCommand(attachCmd)
 }
 
 func attachCommand(cmd *cobra.Command, args []string) error {
-	// List all running containers
-	containers, err := container.ListContainers("claude-.*")
-	if err != nil {
-		return fmt.Errorf("failed to list containers: %w", err)
-	}
-
-	if len(containers) == 0 {
-		fmt.Println("No active Claude sessions")
-		return nil
-	}
-
 	var targetContainer string
 
-	// If container name provided, use it
-	if len(args) > 0 {
-		targetContainer = args[0]
-		// Verify it exists and is running
-		found := false
-		for _, c := range containers {
-			if c == targetContainer {
-				found = true
-				break
-			}
+	// If --slot is provided, calculate container name from workspace and slot
+	if attachSlot > 0 {
+		// Resolve workspace path
+		workspacePath, err := filepath.Abs(attachWorkspace)
+		if err != nil {
+			return fmt.Errorf("failed to resolve workspace path: %w", err)
 		}
-		if !found {
+
+		// Calculate container name for this workspace+slot
+		targetContainer = session.ContainerName(workspacePath, attachSlot)
+
+		// Verify it exists and is running
+		mgr := container.NewManager(targetContainer)
+		running, err := mgr.Running()
+		if err != nil || !running {
 			return fmt.Errorf("container %s not found or not running", targetContainer)
 		}
-	} else if len(containers) == 1 {
-		// Auto-attach if only one session
-		targetContainer = containers[0]
-		fmt.Printf("Attaching to %s...\n", targetContainer)
+
+		fmt.Printf("Attaching to %s (slot %d)...\n", targetContainer, attachSlot)
 	} else {
-		// Multiple sessions - show list
-		fmt.Println("Active Claude sessions:")
-		for i, c := range containers {
-			mgr := container.NewManager(c)
-			running, err := mgr.Running()
-			if err != nil || !running {
-				continue
-			}
-			fmt.Printf("  %d. %s\n", i+1, c)
+		// List all running containers with configured prefix
+		prefix := regexp.QuoteMeta(session.GetContainerPrefix())
+		containers, err := container.ListContainers(prefix + ".*")
+		if err != nil {
+			return fmt.Errorf("failed to list containers: %w", err)
 		}
-		fmt.Printf("\nUse: coi attach <container-name>\n")
-		return nil
+
+		if len(containers) == 0 {
+			fmt.Println("No active Claude sessions")
+			return nil
+		}
+
+		// If container name provided, use it
+		if len(args) > 0 {
+			targetContainer = args[0]
+			// Verify it exists and is running
+			found := false
+			for _, c := range containers {
+				if c == targetContainer {
+					found = true
+					break
+				}
+			}
+			if !found {
+				return fmt.Errorf("container %s not found or not running", targetContainer)
+			}
+		} else if len(containers) == 1 {
+			// Auto-attach if only one session
+			targetContainer = containers[0]
+			fmt.Printf("Attaching to %s...\n", targetContainer)
+		} else {
+			// Multiple sessions - show list
+			fmt.Println("Active Claude sessions:")
+			for i, c := range containers {
+				mgr := container.NewManager(c)
+				running, err := mgr.Running()
+				if err != nil || !running {
+					continue
+				}
+				fmt.Printf("  %d. %s\n", i+1, c)
+			}
+			fmt.Printf("\nUse: coi attach <container-name>\n")
+			return nil
+		}
 	}
 
 	// Attach to container (tmux or bash)
@@ -110,7 +140,19 @@ func attachToContainer(containerName string) error {
 
 	err := incusCmd.Run()
 	if err != nil {
-		return fmt.Errorf("failed to attach to session: %w", err)
+		errStr := err.Error()
+		// Exit status 143 = SIGTERM (128+15), happens when container shuts down
+		// Exit status 137 = SIGKILL (128+9), happens on force kill
+		// Exit status 130 = SIGINT (128+2), happens on Ctrl+C
+		if errStr == "exit status 143" || errStr == "exit status 137" || errStr == "exit status 130" {
+			return nil
+		}
+		// tmux attach failed - likely no session exists
+		// Suggest using --bash to get a shell
+		fmt.Fprintf(os.Stderr, "\nNo tmux session found in container.\n")
+		fmt.Fprintf(os.Stderr, "The container is still running. To get a shell, use:\n")
+		fmt.Fprintf(os.Stderr, "  coi attach %s --bash\n", containerName)
+		return nil
 	}
 
 	return nil
@@ -134,6 +176,14 @@ func attachToContainerWithBash(containerName string) error {
 
 	err := incusCmd.Run()
 	if err != nil {
+		// Handle expected exit conditions gracefully
+		errStr := err.Error()
+		// Exit status 143 = SIGTERM (128+15), happens when container shuts down
+		// Exit status 137 = SIGKILL (128+9), happens on force kill
+		// Exit status 130 = SIGINT (128+2), happens on Ctrl+C
+		if errStr == "exit status 143" || errStr == "exit status 137" || errStr == "exit status 130" {
+			return nil
+		}
 		return fmt.Errorf("failed to attach to container: %w", err)
 	}
 

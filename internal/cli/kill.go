@@ -15,17 +15,19 @@ var (
 
 var killCmd = &cobra.Command{
 	Use:   "kill [container-name...]",
-	Short: "Stop and delete containers",
-	Long: `Stop and delete one or more containers by name.
+	Short: "Force stop and delete containers immediately",
+	Long: `Force stop and delete one or more containers by name.
 
-This is useful for cleaning up dangling or stuck containers.
+This immediately force-kills containers without waiting for graceful shutdown.
+For graceful shutdown, use 'coi shutdown' instead.
+
 Use 'coi list' to see active containers.
 
 Examples:
-  coi kill claude-abc12345-1           # Kill specific container
-  coi kill claude-abc12345-1 claude-xyz78901-2  # Kill multiple containers
-  coi kill --all                       # Kill all containers (with confirmation)
-  coi kill --all --force               # Kill all without confirmation
+  coi kill claude-abc12345-1           # Force kill specific container
+  coi kill claude-abc12345-1 claude-xyz78901-2  # Force kill multiple containers
+  coi kill --all                       # Force kill all containers (with confirmation)
+  coi kill --all --force               # Force kill all without confirmation
 `,
 	RunE: killCommand,
 }
@@ -103,7 +105,14 @@ func killCommand(cmd *cobra.Command, args []string) error {
 
 		// Delete container
 		if err := mgr.Delete(true); err != nil {
-			fmt.Fprintf(os.Stderr, "  Warning: Failed to delete %s: %v\n", name, err)
+			// Check if container still exists - it might have been ephemeral and auto-deleted
+			exists, _ := mgr.Exists()
+			if !exists {
+				killed++
+				fmt.Printf("  ✓ Killed %s\n", name)
+			} else {
+				fmt.Fprintf(os.Stderr, "  Warning: Failed to delete %s: %v\n", name, err)
+			}
 		} else {
 			killed++
 			fmt.Printf("  ✓ Killed %s\n", name)

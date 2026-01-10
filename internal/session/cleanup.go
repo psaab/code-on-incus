@@ -14,7 +14,6 @@ import (
 type CleanupOptions struct {
 	ContainerName string
 	SessionID     string // Claude session ID for saving .claude data
-	Privileged    bool
 	Persistent    bool   // If true, stop but don't delete container
 	SessionsDir   string // e.g., ~/.claude-on-incus/sessions
 	SaveSession   bool   // Whether to save .claude directory
@@ -38,56 +37,67 @@ func Cleanup(opts CleanupOptions) error {
 
 	mgr := container.NewManager(opts.ContainerName)
 
-	// Check if container exists (it might have auto-deleted if ephemeral)
+	// Check if container exists
+	// Containers are always launched as non-ephemeral, so they should exist even when stopped
 	exists, err := mgr.Exists()
 	if err != nil {
 		opts.Logger(fmt.Sprintf("Warning: Could not check container existence: %v", err))
 	}
 
-	// Save session data if requested and container exists
-	// Note: We can pull files from stopped containers, so don't check if running
+	// Always save session data if container exists (works even from stopped containers)
+	// This ensures --resume works regardless of how the user exited (including sudo shutdown 0)
 	if opts.SaveSession && exists && opts.SessionID != "" && opts.SessionsDir != "" {
-		if err := saveSessionData(mgr, opts.SessionID, opts.Privileged, opts.Persistent, opts.Workspace, opts.SessionsDir, opts.Logger); err != nil {
+		if err := saveSessionData(mgr, opts.SessionID, opts.Persistent, opts.Workspace, opts.SessionsDir, opts.Logger); err != nil {
 			opts.Logger(fmt.Sprintf("Warning: Failed to save session data: %v", err))
 		}
 	}
 
-	// Stop container
-	opts.Logger(fmt.Sprintf("Stopping container %s...", opts.ContainerName))
-	if err := mgr.Stop(true); err != nil {
-		opts.Logger(fmt.Sprintf("Warning: Failed to stop container: %v", err))
-	}
-
-	// Delete container only if NOT persistent
-	if !opts.Persistent {
-		// Give container a moment to fully stop before deletion
-		time.Sleep(500 * time.Millisecond)
-
-		// Check if container still exists (ephemeral containers may auto-delete)
-		exists, err := mgr.Exists()
-		if err != nil {
-			opts.Logger(fmt.Sprintf("Warning: Could not check container existence: %v", err))
-		}
-
+	// Handle container based on persistence mode
+	if opts.Persistent {
+		// Persistent mode: keep container for reuse (with all its data/modifications)
 		if exists {
-			opts.Logger(fmt.Sprintf("Deleting container %s...", opts.ContainerName))
-			if err := mgr.Delete(true); err != nil {
-				opts.Logger(fmt.Sprintf("Warning: Failed to delete container: %v", err))
-			} else {
-				opts.Logger("Container deleted successfully")
-			}
+			opts.Logger("Container kept running - use 'coi attach' to reconnect, 'coi shutdown' to stop, or 'coi kill' to force stop")
 		} else {
-			opts.Logger("Container already removed")
+			opts.Logger("Container was stopped but kept for reuse")
 		}
 	} else {
-		opts.Logger("Container stopped but kept (persistent mode)")
+		// Non-persistent mode: behavior depends on how user exited
+		// - If container is running (user typed 'exit' or detached): keep it running
+		// - If container is stopped (user did 'sudo shutdown 0'): delete it
+		if exists {
+			// Check if container is stopped, with retries to handle shutdown delay
+			// Poweroff/shutdown can take several seconds to complete
+			running := true
+			for i := 0; i < 10; i++ {
+				time.Sleep(500 * time.Millisecond)
+				running, _ = mgr.Running()
+				if !running {
+					break
+				}
+			}
+
+			if running {
+				// Container still running - user exited normally, keep it for potential re-attach
+				opts.Logger("Container kept running - use 'coi attach' to reconnect, 'coi shutdown' to stop, or 'coi kill' to force stop")
+			} else {
+				// Container stopped (user did 'sudo shutdown 0') - delete it
+				opts.Logger("Container was stopped, removing...")
+				if err := mgr.Delete(true); err != nil {
+					opts.Logger(fmt.Sprintf("Warning: Failed to delete container: %v", err))
+				} else {
+					opts.Logger("Container removed (session data saved for --resume)")
+				}
+			}
+		} else {
+			opts.Logger("Container was already removed")
+		}
 	}
 
 	return nil
 }
 
 // saveSessionData saves the .claude directory from the container
-func saveSessionData(mgr *container.Manager, sessionID string, privileged bool, persistent bool, workspace string, sessionsDir string, logger func(string)) error {
+func saveSessionData(mgr *container.Manager, sessionID string, persistent bool, workspace string, sessionsDir string, logger func(string)) error {
 	// Determine home directory
 	// For coi images, we always use /home/claude
 	// For other images, we use /root
@@ -95,16 +105,6 @@ func saveSessionData(mgr *container.Manager, sessionID string, privileged bool, 
 	homeDir := "/home/" + ClaudeUser
 
 	claudeDir := filepath.Join(homeDir, ".claude")
-
-	// Check if .claude exists in container
-	exists, err := mgr.DirExists(claudeDir)
-	if err != nil {
-		return fmt.Errorf("failed to check .claude directory: %w", err)
-	}
-	if !exists {
-		logger("No .claude directory found in container")
-		return nil
-	}
 
 	// Create local session directory
 	localSessionDir := filepath.Join(sessionsDir, sessionID)
@@ -124,7 +124,14 @@ func saveSessionData(mgr *container.Manager, sessionID string, privileged bool, 
 	}
 
 	// Pull .claude directory from container
-	if err := mgr.PullDirectory(claudeDir, localSessionDir); err != nil {
+	// Note: incus file pull works on stopped containers, so we don't need to check if running
+	// If .claude doesn't exist, PullDirectory will fail and we handle it gracefully
+	if err := mgr.PullDirectory(claudeDir, localClaudeDir); err != nil {
+		// Check if it's a "not found" error - this is expected if .claude doesn't exist
+		if strings.Contains(err.Error(), "not found") || strings.Contains(err.Error(), "No such file") {
+			logger("No .claude directory found in container")
+			return nil
+		}
 		return fmt.Errorf("failed to pull .claude directory: %w", err)
 	}
 
@@ -132,7 +139,6 @@ func saveSessionData(mgr *container.Manager, sessionID string, privileged bool, 
 	metadata := SessionMetadata{
 		SessionID:     sessionID,
 		ContainerName: mgr.ContainerName,
-		Privileged:    privileged,
 		Persistent:    persistent,
 		Workspace:     workspace,
 		SavedAt:       getCurrentTime(),
@@ -152,7 +158,6 @@ func saveSessionData(mgr *container.Manager, sessionID string, privileged bool, 
 type SessionMetadata struct {
 	SessionID     string `json:"session_id"`
 	ContainerName string `json:"container_name"`
-	Privileged    bool   `json:"privileged"`
 	Persistent    bool   `json:"persistent"`
 	Workspace     string `json:"workspace"`
 	SavedAt       string `json:"saved_at"`
@@ -164,12 +169,11 @@ func saveMetadata(path string, metadata SessionMetadata) error {
 	content := fmt.Sprintf(`{
   "session_id": "%s",
   "container_name": "%s",
-  "privileged": %t,
   "persistent": %t,
   "workspace": "%s",
   "saved_at": "%s"
 }
-`, metadata.SessionID, metadata.ContainerName, metadata.Privileged, metadata.Persistent, metadata.Workspace, metadata.SavedAt)
+`, metadata.SessionID, metadata.ContainerName, metadata.Persistent, metadata.Workspace, metadata.SavedAt)
 
 	return os.WriteFile(path, []byte(content), 0644)
 }
@@ -320,8 +324,6 @@ func LoadSessionMetadata(path string) (*SessionMetadata, error) {
 			metadata.SessionID = extractJSONValue(line)
 		} else if strings.Contains(line, "\"container_name\"") {
 			metadata.ContainerName = extractJSONValue(line)
-		} else if strings.Contains(line, "\"privileged\"") {
-			metadata.Privileged = strings.Contains(line, "true")
 		} else if strings.Contains(line, "\"persistent\"") {
 			metadata.Persistent = strings.Contains(line, "true")
 		} else if strings.Contains(line, "\"workspace\"") {
@@ -349,4 +351,30 @@ func extractJSONValue(line string) string {
 	value := strings.TrimSpace(parts[1])
 	value = strings.Trim(value, `",`)
 	return value
+}
+
+// GetClaudeSessionID extracts Claude's session ID from a saved coi session.
+// Claude stores sessions in .claude/projects/-workspace/<session-id>.jsonl
+// Returns empty string if no session found.
+func GetClaudeSessionID(sessionsDir, coiSessionID string) string {
+	projectsDir := filepath.Join(sessionsDir, coiSessionID, ".claude", "projects", "-workspace")
+
+	entries, err := os.ReadDir(projectsDir)
+	if err != nil {
+		return ""
+	}
+
+	// Look for .jsonl files (session files)
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if strings.HasSuffix(name, ".jsonl") {
+			// Extract session ID from filename (remove .jsonl suffix)
+			return strings.TrimSuffix(name, ".jsonl")
+		}
+	}
+
+	return ""
 }

@@ -15,22 +15,25 @@ var (
 )
 
 var buildCmd = &cobra.Command{
-	Use:   "build [sandbox|privileged|custom]",
-	Short: "Build Incus images for Claude sessions",
-	Long: `Build opinionated Incus images for running Claude Code.
+	Use:   "build",
+	Short: "Build Incus image for Claude sessions",
+	Long: `Build the coi Incus image for running Claude Code.
 
-Available images:
-  sandbox     - Sandbox image (Docker + build tools + Claude CLI)
-  privileged  - Privileged image (sandbox + GitHub CLI + SSH)
-  custom      - Custom image from user script
+The coi image includes:
+  - Base development tools
+  - Node.js LTS
+  - Claude CLI
+  - Docker
+  - GitHub CLI
+  - tmux
+  - test-claude (for testing)
 
 Examples:
-  coi build sandbox
-  coi build privileged
-  coi build sandbox --force
+  coi build
+  coi build --force
   coi build custom my-image --script setup.sh
 `,
-	Args: cobra.MinimumNArgs(1),
+	Args: cobra.NoArgs,
 	RunE: buildCommand,
 }
 
@@ -38,19 +41,14 @@ Examples:
 var buildCustomCmd = &cobra.Command{
 	Use:   "custom <name>",
 	Short: "Build a custom image from a user script",
-	Long: `Build a custom image from a base image using a user-provided build script.
+	Long: `Build a custom image from the coi base image using a user-provided build script.
 
 The build script should be a bash script that will be executed as root in the container.
 
 Examples:
-  # Build with default sandbox base
   coi build custom my-rust-image --script build-rust.sh
-
-  # Build with custom base
-  coi build custom my-image --base coi-sandbox --script setup.sh
-
-  # Build with privileged base
-  coi build custom my-priv-image --privileged --script setup.sh`,
+  coi build custom my-image --base coi --script setup.sh
+  coi build custom my-image --base images:ubuntu/24.04 --script setup.sh`,
 	Args: cobra.ExactArgs(1),
 	RunE: buildCustomCommand,
 }
@@ -60,8 +58,7 @@ func init() {
 
 	// Custom build flags
 	buildCustomCmd.Flags().String("script", "", "Path to build script (required)")
-	buildCustomCmd.Flags().String("base", "", "Base image to build from (default: coi-sandbox)")
-	buildCustomCmd.Flags().Bool("privileged", false, "Use privileged base if --base not specified")
+	buildCustomCmd.Flags().String("base", "", "Base image to build from (default: coi)")
 	buildCustomCmd.Flags().BoolVar(&buildForce, "force", false, "Force rebuild even if image exists")
 	buildCustomCmd.MarkFlagRequired("script")
 
@@ -69,45 +66,25 @@ func init() {
 }
 
 func buildCommand(cmd *cobra.Command, args []string) error {
-	imageType := args[0]
-
-	// If custom, delegate to custom command
-	if imageType == "custom" {
-		return fmt.Errorf("use 'coi build custom <name> --script <path>' for custom images")
-	}
-
-	// Validate image type
-	if imageType != "sandbox" && imageType != "privileged" {
-		return fmt.Errorf("invalid image type: %s (must be 'sandbox', 'privileged', or 'custom')", imageType)
-	}
-
 	// Check if Incus is available
 	if !container.Available() {
 		return fmt.Errorf("incus is not available - please install Incus and ensure you're in the incus-admin group")
 	}
 
 	// Configure build options
-	var opts image.BuildOptions
-	opts.Force = buildForce
-	opts.ImageType = imageType
-	opts.BaseImage = image.BaseImage
-
-	switch imageType {
-	case "sandbox":
-		opts.AliasName = image.SandboxAlias
-		opts.Description = "coi sandbox image (Docker + build tools + sudo)"
-	case "privileged":
-		opts.AliasName = image.PrivilegedAlias
-		opts.Description = "coi privileged image (sandbox + GitHub CLI + SSH)"
-	}
-
-	// Logger function
-	opts.Logger = func(msg string) {
-		fmt.Println(msg)
+	opts := image.BuildOptions{
+		Force:       buildForce,
+		ImageType:   "coi",
+		BaseImage:   image.BaseImage,
+		AliasName:   image.CoiAlias,
+		Description: "coi image (Docker + build tools + Claude CLI + GitHub CLI)",
+		Logger: func(msg string) {
+			fmt.Println(msg)
+		},
 	}
 
 	// Build the image
-	fmt.Printf("Building %s image...\n", imageType)
+	fmt.Println("Building coi image...")
 	builder := image.NewBuilder(opts)
 	result := builder.Build()
 
@@ -120,7 +97,7 @@ func buildCommand(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	fmt.Printf("\n✓ Image '%s' built successfully!\n", opts.AliasName)
+	fmt.Printf("\n Image '%s' built successfully!\n", opts.AliasName)
 	fmt.Printf("  Version: %s\n", result.VersionAlias)
 	fmt.Printf("  Fingerprint: %s\n", result.Fingerprint)
 	return nil
@@ -130,7 +107,6 @@ func buildCustomCommand(cmd *cobra.Command, args []string) error {
 	imageName := args[0]
 	scriptPath, _ := cmd.Flags().GetString("script")
 	baseImage, _ := cmd.Flags().GetString("base")
-	privileged, _ := cmd.Flags().GetBool("privileged")
 
 	// Check if Incus is available
 	if !container.Available() {
@@ -142,13 +118,9 @@ func buildCustomCommand(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("build script not found: %s", scriptPath)
 	}
 
-	// Determine base image
+	// Default to coi base image
 	if baseImage == "" {
-		if privileged {
-			baseImage = image.PrivilegedAlias
-		} else {
-			baseImage = image.SandboxAlias
-		}
+		baseImage = image.CoiAlias
 	}
 
 	// Configure build options

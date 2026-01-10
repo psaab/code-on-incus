@@ -10,17 +10,16 @@ import (
 )
 
 const (
-	BaseImage       = "images:ubuntu/22.04"
-	SandboxAlias    = "coi-sandbox"
-	PrivilegedAlias = "coi-privileged"
-	BuildContainer  = "coi-build"
-	ClaudeUser      = "claude"
-	ClaudeUID       = 1000
+	BaseImage      = "images:ubuntu/22.04"
+	CoiAlias       = "coi"
+	BuildContainer = "coi-build"
+	ClaudeUser     = "claude"
+	ClaudeUID      = 1000
 )
 
 // BuildOptions contains options for building an image
 type BuildOptions struct {
-	ImageType    string // "sandbox", "privileged", or "custom"
+	ImageType    string // "coi" or "custom"
 	AliasName    string
 	Description  string
 	BaseImage    string
@@ -158,10 +157,8 @@ func (b *Builder) waitForNetwork() error {
 // runBuildSteps executes the build steps based on image type
 func (b *Builder) runBuildSteps() error {
 	switch b.opts.ImageType {
-	case "sandbox":
-		return b.buildSandbox()
-	case "privileged":
-		return b.buildPrivileged()
+	case "coi":
+		return b.buildCoi()
 	case "custom":
 		return b.buildCustom()
 	default:
@@ -169,40 +166,60 @@ func (b *Builder) runBuildSteps() error {
 	}
 }
 
-// buildSandbox implements sandbox image build steps
-func (b *Builder) buildSandbox() error {
-	if err := b.installBaseDependencies(); err != nil {
-		return err
-	}
-	if err := b.createClaudeUser(false); err != nil {
-		return err
-	}
-	if err := b.installClaudeCLI(); err != nil {
-		return err
-	}
-	if err := b.installTestClaude(); err != nil {
-		return err
-	}
-	if err := b.installDocker(); err != nil {
-		return err
-	}
-	return nil
+// buildCoi implements coi image build steps using external script
+func (b *Builder) buildCoi() error {
+	return b.runBuildScript("scripts/build/coi.sh")
 }
 
-// buildPrivileged implements privileged image build steps
-func (b *Builder) buildPrivileged() error {
-	// Run all sandbox steps first
-	if err := b.buildSandbox(); err != nil {
-		return err
+// runBuildScript executes a build script from the scripts directory
+func (b *Builder) runBuildScript(scriptPath string) error {
+	// Find script - try relative to cwd first, then relative to executable
+	if _, err := os.Stat(scriptPath); err != nil {
+		// Try to find relative to executable
+		execPath, _ := os.Executable()
+		if execPath != "" {
+			altPath := fmt.Sprintf("%s/../%s", execPath, scriptPath)
+			if _, err := os.Stat(altPath); err == nil {
+				scriptPath = altPath
+			}
+		}
 	}
 
-	// Add privileged extras
-	if err := b.installGitHubCLI(); err != nil {
-		return err
+	// Verify script exists
+	if _, err := os.Stat(scriptPath); err != nil {
+		return fmt.Errorf("build script not found: %s (run from project root)", scriptPath)
 	}
-	if err := b.setupSSHDirectory(); err != nil {
-		return err
+
+	b.opts.Logger(fmt.Sprintf("Using build script: %s", scriptPath))
+
+	// Push test-claude to /tmp (required for build scripts)
+	testClaudePath := "testdata/fake-claude/claude"
+	if _, err := os.Stat(testClaudePath); err != nil {
+		return fmt.Errorf("test-claude not found at %s (run from project root)", testClaudePath)
 	}
+	b.opts.Logger("Pushing test-claude to container...")
+	if err := b.mgr.PushFile(testClaudePath, "/tmp/test-claude"); err != nil {
+		return fmt.Errorf("failed to push test-claude: %w", err)
+	}
+
+	// Push build script to container
+	b.opts.Logger("Pushing build script to container...")
+	if err := b.mgr.PushFile(scriptPath, "/tmp/build.sh"); err != nil {
+		return fmt.Errorf("failed to push build script: %w", err)
+	}
+
+	// Make executable
+	if _, err := b.mgr.ExecCommand("chmod +x /tmp/build.sh", container.ExecCommandOptions{}); err != nil {
+		return fmt.Errorf("failed to chmod build script: %w", err)
+	}
+
+	// Execute script
+	b.opts.Logger("Executing build script...")
+	if _, err := b.mgr.ExecCommand("/tmp/build.sh", container.ExecCommandOptions{Capture: false}); err != nil {
+		return fmt.Errorf("build script failed: %w", err)
+	}
+
+	b.opts.Logger("Build script completed successfully")
 	return nil
 }
 

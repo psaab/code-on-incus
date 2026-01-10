@@ -10,7 +10,6 @@ func TestLoad(t *testing.T) {
 	// Clean environment
 	cleanEnv := func() {
 		os.Unsetenv("CLAUDE_ON_INCUS_IMAGE")
-		os.Unsetenv("CLAUDE_ON_INCUS_PRIVILEGED")
 		os.Unsetenv("CLAUDE_ON_INCUS_PERSISTENT")
 	}
 	defer cleanEnv()
@@ -33,11 +32,9 @@ func TestLoad(t *testing.T) {
 func TestLoadFromEnv(t *testing.T) {
 	// Set environment variables
 	os.Setenv("CLAUDE_ON_INCUS_IMAGE", "env-image")
-	os.Setenv("CLAUDE_ON_INCUS_PRIVILEGED", "true")
 	os.Setenv("CLAUDE_ON_INCUS_PERSISTENT", "1")
 	defer func() {
 		os.Unsetenv("CLAUDE_ON_INCUS_IMAGE")
-		os.Unsetenv("CLAUDE_ON_INCUS_PRIVILEGED")
 		os.Unsetenv("CLAUDE_ON_INCUS_PERSISTENT")
 	}()
 
@@ -46,10 +43,6 @@ func TestLoadFromEnv(t *testing.T) {
 
 	if cfg.Defaults.Image != "env-image" {
 		t.Errorf("Expected image 'env-image', got '%s'", cfg.Defaults.Image)
-	}
-
-	if !cfg.Defaults.Privileged {
-		t.Error("Expected privileged to be true from env")
 	}
 
 	if !cfg.Defaults.Persistent {

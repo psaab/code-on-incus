@@ -14,12 +14,8 @@ func TestGetDefaultConfig(t *testing.T) {
 	}
 
 	// Check defaults
-	if cfg.Defaults.Image != "coi-sandbox" {
-		t.Errorf("Expected default image 'coi-sandbox', got '%s'", cfg.Defaults.Image)
-	}
-
-	if cfg.Defaults.Privileged {
-		t.Error("Expected privileged to be false by default")
+	if cfg.Defaults.Image != "coi" {
+		t.Errorf("Expected default image 'coi', got '%s'", cfg.Defaults.Image)
 	}
 
 	if cfg.Defaults.Model != "claude-sonnet-4-5" {
@@ -120,7 +116,7 @@ func TestGetProfile(t *testing.T) {
 	// Add a test profile
 	cfg.Profiles["test"] = ProfileConfig{
 		Image:      "test-image",
-		Privileged: true,
+		Persistent: true,
 	}
 
 	// Test getting existing profile
@@ -147,7 +143,7 @@ func TestApplyProfile(t *testing.T) {
 	// Add a test profile
 	cfg.Profiles["rust"] = ProfileConfig{
 		Image:      "rust-image",
-		Privileged: true,
+		Persistent: true,
 	}
 
 	// Apply the profile
@@ -161,8 +157,8 @@ func TestApplyProfile(t *testing.T) {
 		t.Errorf("Expected image 'rust-image', got '%s'", cfg.Defaults.Image)
 	}
 
-	if !cfg.Defaults.Privileged {
-		t.Error("Expected privileged to be true")
+	if !cfg.Defaults.Persistent {
+		t.Error("Expected persistent to be true")
 	}
 
 	// Try to apply non-existent profile

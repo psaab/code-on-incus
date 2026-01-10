@@ -68,10 +68,7 @@ func runCommand(cmd *cobra.Command, args []string) error {
 	// Determine image (use custom if specified, otherwise default)
 	img := imageName
 	if img == "" {
-		img = "coi-sandbox"
-		if privileged {
-			img = "coi-privileged"
-		}
+		img = "coi"
 	}
 
 	// Check if image exists

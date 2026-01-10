@@ -9,17 +9,15 @@ import (
 
 var (
 	// Global flags
-	workspace         string
-	slot              int
-	imageName         string
-	privileged        bool
-	persistent        bool
-	resume            string
-	continueSession   string // Alias for resume
-	profile           string
-	envVars           []string
-	storage           string
-	mountClaudeConfig bool
+	workspace       string
+	slot            int
+	imageName       string
+	persistent      bool
+	resume          string
+	continueSession string // Alias for resume
+	profile         string
+	envVars         []string
+	storage         string
 
 	// Loaded config
 	cfg *config.Config
@@ -35,9 +33,8 @@ with session persistence, workspace isolation, and multi-slot support.
 Examples:
   coi                          # Start interactive Claude session (same as 'coi shell')
   coi shell --slot 2           # Use specific slot
-  coi shell --privileged       # Enable Git/SSH access
   coi run "npm test"           # Run command in container
-  coi build sandbox            # Build sandbox image
+  coi build                    # Build coi image
   coi images                   # List available images
   coi list                     # List active sessions
 `,
@@ -63,14 +60,8 @@ Examples:
 		}
 
 		// Apply config defaults to flags that weren't explicitly set
-		if !cmd.Flags().Changed("privileged") {
-			privileged = cfg.Defaults.Privileged
-		}
 		if !cmd.Flags().Changed("persistent") {
 			persistent = cfg.Defaults.Persistent
-		}
-		if !cmd.Flags().Changed("mount-claude-config") {
-			mountClaudeConfig = cfg.Defaults.MountClaudeConfig
 		}
 
 		return nil
@@ -89,8 +80,7 @@ func init() {
 	// Global flags available to all commands
 	rootCmd.PersistentFlags().StringVarP(&workspace, "workspace", "w", ".", "Workspace directory to mount")
 	rootCmd.PersistentFlags().IntVar(&slot, "slot", 0, "Slot number for parallel sessions (0 = auto-allocate)")
-	rootCmd.PersistentFlags().StringVar(&imageName, "image", "", "Custom image to use (default: coi-sandbox or coi-privileged)")
-	rootCmd.PersistentFlags().BoolVar(&privileged, "privileged", false, "Use privileged image (Git/SSH/sudo)")
+	rootCmd.PersistentFlags().StringVar(&imageName, "image", "", "Custom image to use (default: coi)")
 	rootCmd.PersistentFlags().BoolVar(&persistent, "persistent", false, "Reuse container across sessions")
 	rootCmd.PersistentFlags().StringVar(&resume, "resume", "", "Resume from session ID (omit value to auto-detect)")
 	rootCmd.PersistentFlags().Lookup("resume").NoOptDefVal = "auto"
@@ -99,7 +89,6 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&profile, "profile", "", "Use named profile")
 	rootCmd.PersistentFlags().StringSliceVarP(&envVars, "env", "e", []string{}, "Environment variables (KEY=VALUE)")
 	rootCmd.PersistentFlags().StringVar(&storage, "storage", "", "Mount persistent storage")
-	rootCmd.PersistentFlags().BoolVar(&mountClaudeConfig, "mount-claude-config", true, "Mount/copy host ~/.claude directory and .claude.json")
 
 	// Add subcommands
 	rootCmd.AddCommand(runCmd)
@@ -107,10 +96,10 @@ func init() {
 	rootCmd.AddCommand(listCmd)
 	rootCmd.AddCommand(infoCmd)
 	rootCmd.AddCommand(buildCmd)
-	rootCmd.AddCommand(imagesCmd)      // Legacy: coi images
-	rootCmd.AddCommand(imageCmd)       // New: coi image <subcommand>
-	rootCmd.AddCommand(containerCmd)   // New: coi container <subcommand>
-	rootCmd.AddCommand(fileCmd)        // New: coi file <subcommand>
+	rootCmd.AddCommand(imagesCmd)    // Legacy: coi images
+	rootCmd.AddCommand(imageCmd)     // New: coi image <subcommand>
+	rootCmd.AddCommand(containerCmd) // New: coi container <subcommand>
+	rootCmd.AddCommand(fileCmd)      // New: coi file <subcommand>
 	rootCmd.AddCommand(cleanCmd)
 	rootCmd.AddCommand(killCmd)
 	rootCmd.AddCommand(tmuxCmd)

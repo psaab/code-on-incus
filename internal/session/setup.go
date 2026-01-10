@@ -10,28 +10,23 @@ import (
 )
 
 const (
-	DefaultImage      = "images:ubuntu/22.04"
-	SandboxImage      = "coi-sandbox"
-	PrivilegedImage   = "coi-privileged"
-	ClaudeUser        = "claude"
-	ClaudeUID         = 1000
+	DefaultImage = "images:ubuntu/22.04"
+	CoiImage     = "coi"
+	ClaudeUser   = "claude"
+	ClaudeUID    = 1000
 )
 
 // SetupOptions contains options for setting up a session
 type SetupOptions struct {
-	WorkspacePath     string
-	Image             string
-	Privileged        bool
-	Persistent        bool   // Keep container between sessions (don't delete on cleanup)
-	ResumeFromID      string
-	Slot              int
-	StoragePath       string
-	SessionsDir       string // e.g., ~/.claude-on-incus/sessions
-	SSHKeyPath        string // e.g., ~/.ssh/id_coi
-	GitConfigPath     string // e.g., ~/.gitconfig
-	ClaudeConfigPath  string // e.g., ~/.claude (mount host Claude config)
-	MountClaudeConfig bool   // Whether to mount host Claude config (default true)
-	Logger            func(string)
+	WorkspacePath    string
+	Image            string
+	Persistent       bool   // Keep container between sessions (don't delete on cleanup)
+	ResumeFromID     string
+	Slot             int
+	StoragePath      string
+	SessionsDir      string // e.g., ~/.claude-on-incus/sessions
+	ClaudeConfigPath string // e.g., ~/.claude (host Claude config to copy credentials from)
+	Logger           func(string)
 }
 
 // SetupResult contains the result of setup
@@ -64,10 +59,7 @@ func Setup(opts SetupOptions) (*SetupResult, error) {
 	// 2. Determine image
 	image := opts.Image
 	if image == "" {
-		image = SandboxImage
-		if opts.Privileged {
-			image = PrivilegedImage
-		}
+		image = CoiImage
 	}
 	result.Image = image
 
@@ -81,9 +73,9 @@ func Setup(opts SetupOptions) (*SetupResult, error) {
 	}
 
 	// 3. Determine execution context
-	usingCoiImage := image == SandboxImage || image == PrivilegedImage
-	// coi images have the claude user pre-configured, so run as that user
+	// coi image has the claude user pre-configured, so run as that user
 	// Other images don't have this setup, so run as root
+	usingCoiImage := image == CoiImage
 	result.RunAsRoot = !usingCoiImage
 	if result.RunAsRoot {
 		result.HomeDir = "/root"
@@ -137,10 +129,11 @@ func Setup(opts SetupOptions) (*SetupResult, error) {
 	}
 
 	// 5. Launch container if needed
+	// Always launch as non-ephemeral so we can save session data even if container is stopped
+	// (e.g., via 'sudo shutdown 0' from within). Cleanup will delete if not --persistent.
 	if !skipLaunch {
 		opts.Logger(fmt.Sprintf("Launching container from %s...", image))
-		ephemeral := !opts.Persistent
-		if err := result.Manager.Launch(image, ephemeral); err != nil {
+		if err := result.Manager.Launch(image, false); err != nil {
 			return nil, fmt.Errorf("failed to launch container: %w", err)
 		}
 	}
@@ -188,62 +181,25 @@ func Setup(opts SetupOptions) (*SetupResult, error) {
 		opts.Logger("Reusing existing workspace and storage mounts")
 	}
 
-	// 9b. Setup Claude config (skip if resuming - .claude already restored)
-	if opts.MountClaudeConfig && opts.ClaudeConfigPath != "" && opts.ResumeFromID == "" {
+	// 10. Setup Claude config (skip if resuming - .claude already restored)
+	if opts.ClaudeConfigPath != "" && opts.ResumeFromID == "" {
 		// Check if host .claude directory exists
 		if _, err := os.Stat(opts.ClaudeConfigPath); err == nil {
-			if opts.Privileged {
-				// PRIVILEGED MODE: Mount host .claude directory (shared credentials)
-				if !skipLaunch {
-					opts.Logger(fmt.Sprintf("Mounting Claude config: %s", opts.ClaudeConfigPath))
-					claudeConfigDest := filepath.Join(result.HomeDir, ".claude")
-
-					// Mount with shift=true for proper read/write access
-					if err := result.Manager.MountDisk("claude-config", opts.ClaudeConfigPath, claudeConfigDest, true); err != nil {
-						opts.Logger(fmt.Sprintf("Warning: Failed to mount Claude config: %v", err))
-					}
-
-					// Also mount .claude.json if it exists
-					claudeJsonPath := filepath.Join(filepath.Dir(opts.ClaudeConfigPath), ".claude.json")
-					if _, err := os.Stat(claudeJsonPath); err == nil {
-						opts.Logger(fmt.Sprintf("Mounting .claude.json: %s", claudeJsonPath))
-						claudeJsonDest := filepath.Join(result.HomeDir, ".claude.json")
-						if err := result.Manager.MountDisk("claude-json", claudeJsonPath, claudeJsonDest, true); err != nil {
-							opts.Logger(fmt.Sprintf("Warning: Failed to mount .claude.json: %v", err))
-						}
-					}
+			// Copy and inject settings (but only if NOT resuming)
+			// Only run on first launch, not when restarting persistent container
+			if !skipLaunch {
+				opts.Logger("Setting up Claude config...")
+				if err := setupClaudeConfig(result.Manager, opts.ClaudeConfigPath, result.HomeDir, opts.Logger); err != nil {
+					opts.Logger(fmt.Sprintf("Warning: Failed to setup Claude config: %v", err))
 				}
 			} else {
-				// SANDBOX MODE: Copy and inject settings (but only if NOT resuming)
-				// Only run on first launch, not when restarting persistent container
-				if !skipLaunch {
-					opts.Logger("Setting up Claude config for sandbox mode...")
-					if err := setupClaudeConfigSandbox(result.Manager, opts.ClaudeConfigPath, result.HomeDir, opts.Logger); err != nil {
-						opts.Logger(fmt.Sprintf("Warning: Failed to setup Claude config: %v", err))
-					}
-				} else {
-					opts.Logger("Reusing existing Claude config (persistent container)")
-				}
+				opts.Logger("Reusing existing Claude config (persistent container)")
 			}
 		} else if !os.IsNotExist(err) {
 			return nil, fmt.Errorf("failed to check Claude config directory: %w", err)
 		}
 	} else if opts.ResumeFromID != "" {
 		opts.Logger("Resuming session - using restored .claude config")
-	}
-
-	// 10. Setup SSH keys (privileged only)
-	if opts.Privileged && opts.SSHKeyPath != "" {
-		if err := setupSSHKeys(result.Manager, result.HomeDir, opts.SSHKeyPath, opts.Logger); err != nil {
-			opts.Logger(fmt.Sprintf("Warning: Failed to setup SSH keys: %v", err))
-		}
-	}
-
-	// 11. Setup git config (privileged only)
-	if opts.Privileged && opts.GitConfigPath != "" {
-		if err := setupGitConfig(result.Manager, result.HomeDir, opts.GitConfigPath, opts.Logger); err != nil {
-			opts.Logger(fmt.Sprintf("Warning: Failed to setup git config: %v", err))
-		}
 	}
 
 	opts.Logger("Container setup complete!")
@@ -288,13 +244,16 @@ func restoreSessionData(mgr *container.Manager, resumeID, homeDir, sessionsDir s
 	logger(fmt.Sprintf("Restoring session data from %s", resumeID))
 
 	// Push .claude directory to container
-	if err := mgr.PushDirectory(sourceClaudeDir, homeDir); err != nil {
+	// PushDirectory extracts the parent from the path and pushes to create the directory there
+	// So we pass the full destination path where .claude should end up
+	destClaudePath := filepath.Join(homeDir, ".claude")
+	if err := mgr.PushDirectory(sourceClaudeDir, destClaudePath); err != nil {
 		return fmt.Errorf("failed to push .claude directory: %w", err)
 	}
 
 	// Fix ownership if running as claude user
 	if homeDir != "/root" {
-		claudePath := filepath.Join(homeDir, ".claude")
+		claudePath := destClaudePath
 		if err := mgr.Chown(claudePath, ClaudeUID, ClaudeUID); err != nil {
 			return fmt.Errorf("failed to set ownership: %w", err)
 		}
@@ -359,60 +318,8 @@ func injectCredentials(mgr *container.Manager, hostClaudeConfigPath, homeDir str
 	return nil
 }
 
-// setupSSHKeys configures SSH keys for privileged containers
-func setupSSHKeys(mgr *container.Manager, homeDir, sshKeyPath string, logger func(string)) error {
-	// Check if SSH key exists
-	if _, err := os.Stat(sshKeyPath); err != nil {
-		return fmt.Errorf("SSH key not found: %s", sshKeyPath)
-	}
-
-	logger("Configuring SSH keys...")
-
-	// Create .ssh directory
-	sshDir := filepath.Join(homeDir, ".ssh")
-	if _, err := mgr.ExecCommand(fmt.Sprintf("mkdir -p %s", sshDir), container.ExecCommandOptions{}); err != nil {
-		return err
-	}
-
-	// Push SSH key
-	destKey := filepath.Join(sshDir, "id_coi")
-	if err := mgr.PushFile(sshKeyPath, destKey); err != nil {
-		return err
-	}
-
-	// Set permissions
-	if _, err := mgr.ExecCommand(fmt.Sprintf("chmod 600 %s", destKey), container.ExecCommandOptions{}); err != nil {
-		return err
-	}
-
-	// Create SSH config
-	sshConfig := fmt.Sprintf(`Host github.com
-  IdentityFile %s
-  StrictHostKeyChecking accept-new
-  IdentitiesOnly yes
-`, destKey)
-
-	configPath := filepath.Join(sshDir, "config")
-	if err := mgr.CreateFile(configPath, sshConfig); err != nil {
-		return err
-	}
-
-	// Set permissions
-	if _, err := mgr.ExecCommand(fmt.Sprintf("chmod 600 %s", configPath), container.ExecCommandOptions{}); err != nil {
-		return err
-	}
-
-	// Fix ownership
-	if err := mgr.Chown(sshDir, ClaudeUID, ClaudeUID); err != nil {
-		return err
-	}
-
-	logger("SSH keys configured")
-	return nil
-}
-
-// setupClaudeConfigSandbox copies .claude directory and injects sandbox settings
-func setupClaudeConfigSandbox(mgr *container.Manager, hostClaudePath, homeDir string, logger func(string)) error {
+// setupClaudeConfig copies .claude directory and injects sandbox settings
+func setupClaudeConfig(mgr *container.Manager, hostClaudePath, homeDir string, logger func(string)) error {
 	claudeDir := filepath.Join(homeDir, ".claude")
 
 	// Create .claude directory in container
@@ -510,34 +417,5 @@ func setupClaudeConfigSandbox(mgr *container.Manager, hostClaudePath, homeDir st
 		return fmt.Errorf("failed to check .claude.json: %w", err)
 	}
 
-	return nil
-}
-
-// setupGitConfig configures git for privileged containers
-func setupGitConfig(mgr *container.Manager, homeDir, gitConfigPath string, logger func(string)) error {
-	// Check if gitconfig exists
-	if _, err := os.Stat(gitConfigPath); err != nil {
-		return fmt.Errorf("gitconfig not found: %s", gitConfigPath)
-	}
-
-	logger("Configuring git...")
-
-	// Mount gitconfig
-	gitconfigDest := filepath.Join(homeDir, ".gitconfig")
-	if err := mgr.MountDisk("gitconfig", gitConfigPath, gitconfigDest, true); err != nil {
-		return err
-	}
-
-	// Set GIT_SSH_COMMAND in bashrc
-	bashrc := filepath.Join(homeDir, ".bashrc")
-	sshKey := filepath.Join(homeDir, ".ssh", "id_coi")
-	gitSSHCmd := fmt.Sprintf("export GIT_SSH_COMMAND=\"ssh -i %s -o StrictHostKeyChecking=accept-new\"", sshKey)
-
-	cmd := fmt.Sprintf("echo '%s' >> %s", gitSSHCmd, bashrc)
-	if _, err := mgr.ExecCommand(cmd, container.ExecCommandOptions{}); err != nil {
-		return err
-	}
-
-	logger("Git configuration set up")
 	return nil
 }

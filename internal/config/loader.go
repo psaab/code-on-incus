@@ -78,11 +78,6 @@ func loadFromEnv(cfg *Config) {
 		cfg.Paths.StorageDir = ExpandPath(env)
 	}
 
-	// CLAUDE_ON_INCUS_PRIVILEGED
-	if env := os.Getenv("CLAUDE_ON_INCUS_PRIVILEGED"); env == "true" || env == "1" {
-		cfg.Defaults.Privileged = true
-	}
-
 	// CLAUDE_ON_INCUS_PERSISTENT
 	if env := os.Getenv("CLAUDE_ON_INCUS_PERSISTENT"); env == "true" || env == "1" {
 		cfg.Defaults.Persistent = true
@@ -112,16 +107,15 @@ func WriteExample(path string) error {
 # See: https://github.com/mensfeld/claude-on-incus
 
 [defaults]
-image = "coi-sandbox"
-privileged = false
+image = "coi"
 # Set persistent=true to reuse containers across sessions (keeps installed tools)
 persistent = false
 model = "claude-sonnet-4-5"
 
 [paths]
-sessions_dir = "~/.claude-on-incus/sessions"
-storage_dir = "~/.claude-on-incus/storage"
-logs_dir = "~/.claude-on-incus/logs"
+sessions_dir = "~/.coi/sessions"
+storage_dir = "~/.coi/storage"
+logs_dir = "~/.coi/logs"
 
 [incus]
 project = "default"
@@ -131,16 +125,14 @@ claude_user = "claude"
 
 # Example profile for Rust development with persistent container
 # [profiles.rust]
-# image = "claudeyard-rust"
+# image = "coi-rust"
 # environment = { RUST_BACKTRACE = "1" }
-# privileged = false
 # persistent = true
 
 # Example profile for web development
 # [profiles.web]
-# image = "coi-sandbox"
+# image = "coi"
 # environment = { NODE_ENV = "development" }
-# privileged = true
 # persistent = true
 `
 
