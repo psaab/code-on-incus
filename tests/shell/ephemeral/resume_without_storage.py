@@ -130,9 +130,10 @@ def test_resume_does_not_persist_home_files(coi_binary, cleanup_containers, work
     except TimeoutError:
         pass  # Continue anyway to check file
 
+    time.sleep(2)
     # Exit claude to bash
     child2.send("exit")
-    time.sleep(0.3)
+    time.sleep(1)
     child2.send("\x0d")
     time.sleep(2)
 
