@@ -168,16 +168,21 @@ def test_ephemeral_session_with_resume(coi_binary, cleanup_containers, workspace
 
     # Wait for second container to be deleted
     container_name2 = calculate_container_name(workspace_dir, 1)
-    wait_for_specific_container_deletion(container_name2, timeout=30)
+    deleted = wait_for_specific_container_deletion(container_name2, timeout=30)
 
-    # Force cleanup any remaining containers
+    # Force cleanup if container still exists
+    if not deleted:
+        subprocess.run(
+            [coi_binary, "container", "delete", container_name2, "--force"],
+            capture_output=True,
+            timeout=30,
+        )
+
+    # Verify container is gone
+    time.sleep(1)
     containers = get_container_list()
-    for c in containers:
-        if c.startswith("coi-test-"):
-            subprocess.run(
-                ["sg", "incus-admin", "-c", f"incus delete --force {c}"],
-                capture_output=True,
-            )
+    assert container_name2 not in containers, \
+        f"Container {container_name2} should be deleted after cleanup"
 
     # Assert resume worked
     assert resumed, f"Should see 'Resuming session' in output. Got:\n{output2}"

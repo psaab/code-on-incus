@@ -86,14 +86,10 @@ func shellCommand(cmd *cobra.Command, args []string) error {
 
 	// Auto-detect if flag was set but value is empty or "auto"
 	if resumeFlagSet && (resumeID == "" || resumeID == "auto") {
-		// Auto-detect latest for workspace
+		// Auto-detect latest for workspace (only looks at sessions from the same workspace)
 		resumeID, err = session.GetLatestSessionForWorkspace(sessionsDir, absWorkspace)
 		if err != nil {
-			// Fallback to global latest if no workspace-specific session found
-			resumeID, err = session.GetLatestSession(sessionsDir)
-			if err != nil {
-				return fmt.Errorf("no previous session to resume: %w", err)
-			}
+			return fmt.Errorf("no previous session to resume for this workspace: %w", err)
 		}
 		fmt.Fprintf(os.Stderr, "Auto-detected session: %s\n", resumeID)
 	} else if resumeID != "" {
