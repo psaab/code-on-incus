@@ -149,7 +149,14 @@ func runCommand(cmd *cobra.Command, args []string) error {
 
 	// Build incus exec command directly with proper args
 	incusArgs := []string{"exec", containerName, "--user", fmt.Sprintf("%d", container.CodeUID),
-		"--group", fmt.Sprintf("%d", container.CodeUID), "--cwd", "/workspace", "--"}
+		"--group", fmt.Sprintf("%d", container.CodeUID), "--cwd", "/workspace"}
+
+	// Add environment variables from -e flags
+	for _, e := range envVars {
+		incusArgs = append(incusArgs, "--env", e)
+	}
+
+	incusArgs = append(incusArgs, "--")
 	incusArgs = append(incusArgs, args...)
 
 	// Execute and capture output and exit code
