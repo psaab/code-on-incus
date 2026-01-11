@@ -169,8 +169,34 @@ Examples:
 			return nil
 		}
 
-		// For non-capture mode, pass arguments directly to maintain quoting
-		err := mgr.Exec(commandArgs...)
+		// For non-capture mode, use ExecArgs with options
+		userFlag, _ := cmd.Flags().GetInt("user")
+		groupFlag, _ := cmd.Flags().GetInt("group")
+		envVars, _ := cmd.Flags().GetStringArray("env")
+		cwd, _ := cmd.Flags().GetString("cwd")
+
+		// Parse env vars
+		env := make(map[string]string)
+		for _, e := range envVars {
+			parts := strings.SplitN(e, "=", 2)
+			if len(parts) == 2 {
+				env[parts[0]] = parts[1]
+			}
+		}
+
+		opts := container.ExecCommandOptions{
+			Cwd: cwd,
+			Env: env,
+		}
+
+		if cmd.Flags().Changed("user") {
+			opts.User = &userFlag
+		}
+		if cmd.Flags().Changed("group") {
+			opts.Group = &groupFlag
+		}
+
+		err := mgr.ExecArgs(commandArgs, opts)
 		if err != nil {
 			return exitError(1, fmt.Sprintf("command failed: %v", err))
 		}

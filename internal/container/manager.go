@@ -92,6 +92,37 @@ func (m *Manager) Exec(args ...string) error {
 	return IncusExec(cmdArgs...)
 }
 
+// ExecArgs executes command arguments in the container with options
+func (m *Manager) ExecArgs(commandArgs []string, opts ExecCommandOptions) error {
+	args := []string{"exec", m.ContainerName}
+
+	// Add environment variables
+	for k, v := range opts.Env {
+		args = append(args, "--env", fmt.Sprintf("%s=%s", k, v))
+	}
+
+	// Add working directory
+	if opts.Cwd != "" {
+		args = append(args, "--cwd", opts.Cwd)
+	}
+
+	// Add user/group
+	if opts.User != nil {
+		args = append(args, "--user", fmt.Sprintf("%d", *opts.User))
+		group := opts.User // default to same as user
+		if opts.Group != nil {
+			group = opts.Group
+		}
+		args = append(args, "--group", fmt.Sprintf("%d", *group))
+	}
+
+	// Add command arguments
+	args = append(args, "--")
+	args = append(args, commandArgs...)
+
+	return IncusExec(args...)
+}
+
 // ExecCommandOptions holds options for executing commands
 type ExecCommandOptions struct {
 	User        *int

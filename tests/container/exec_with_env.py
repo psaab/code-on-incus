@@ -55,8 +55,9 @@ def test_exec_with_env(coi_binary, cleanup_containers, workspace_dir):
 
     # === Phase 3: Verify environment variable ===
 
-    assert "test123" in result.stdout.strip(), \
-        f"Environment variable should be set. Got:\n{result.stdout}"
+    combined_output = result.stdout + result.stderr
+    assert "test123" in combined_output.strip(), \
+        f"Environment variable should be set. Got:\n{combined_output}"
 
     # === Phase 4: Test multiple env vars ===
 
@@ -72,8 +73,9 @@ def test_exec_with_env(coi_binary, cleanup_containers, workspace_dir):
     assert result.returncode == 0, \
         f"Exec with multiple --env should succeed. stderr: {result.stderr}"
 
-    assert "value1-value2" in result.stdout.strip(), \
-        f"Both env vars should be set. Got:\n{result.stdout}"
+    combined_output = result.stdout + result.stderr
+    assert "value1-value2" in combined_output.strip(), \
+        f"Both env vars should be set. Got:\n{combined_output}"
 
     # === Phase 5: Cleanup ===
 

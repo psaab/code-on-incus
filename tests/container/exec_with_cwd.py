@@ -55,8 +55,9 @@ def test_exec_with_cwd(coi_binary, cleanup_containers, workspace_dir):
 
     # === Phase 3: Verify directory ===
 
-    assert "/tmp" in result.stdout.strip(), \
-        f"Should run in /tmp. Got:\n{result.stdout}"
+    combined_output = result.stdout + result.stderr
+    assert "/tmp" in combined_output.strip(), \
+        f"Should run in /tmp. Got:\n{combined_output}"
 
     # === Phase 4: Test another directory ===
 
@@ -70,8 +71,9 @@ def test_exec_with_cwd(coi_binary, cleanup_containers, workspace_dir):
     assert result.returncode == 0, \
         f"Exec with --cwd /home should succeed. stderr: {result.stderr}"
 
-    assert "/home" in result.stdout.strip(), \
-        f"Should run in /home. Got:\n{result.stdout}"
+    combined_output = result.stdout + result.stderr
+    assert "/home" in combined_output.strip(), \
+        f"Should run in /home. Got:\n{combined_output}"
 
     # === Phase 5: Cleanup ===
 

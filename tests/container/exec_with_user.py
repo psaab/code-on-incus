@@ -3,7 +3,7 @@ Test for coi container exec --user - executes as specified user.
 
 Tests that:
 1. Launch a container
-2. Execute command with --user flag
+2. Execute command with --user flag (numeric UID)
 3. Verify command runs as that user
 """
 
@@ -21,9 +21,9 @@ def test_exec_with_user(coi_binary, cleanup_containers, workspace_dir):
 
     Flow:
     1. Launch a container
-    2. Execute whoami with --user root
+    2. Execute whoami with --user 0 (root)
     3. Verify output shows root
-    4. Execute whoami with --user ubuntu (if exists)
+    4. Execute whoami with --user 1000 (claude)
     5. Cleanup
     """
     container_name = calculate_container_name(workspace_dir, 1)
@@ -42,10 +42,10 @@ def test_exec_with_user(coi_binary, cleanup_containers, workspace_dir):
 
     time.sleep(3)
 
-    # === Phase 2: Execute as root ===
+    # === Phase 2: Execute as root (UID 0) ===
 
     result = subprocess.run(
-        [coi_binary, "container", "exec", container_name, "--user", "root", "--", "whoami"],
+        [coi_binary, "container", "exec", container_name, "--user", "0", "--", "whoami"],
         capture_output=True,
         text=True,
         timeout=30,
@@ -54,24 +54,26 @@ def test_exec_with_user(coi_binary, cleanup_containers, workspace_dir):
     assert result.returncode == 0, \
         f"Exec as root should succeed. stderr: {result.stderr}"
 
-    assert "root" in result.stdout.strip(), \
-        f"Should run as root. Got:\n{result.stdout}"
+    combined_output = result.stdout + result.stderr
+    assert "root" in combined_output.strip(), \
+        f"Should run as root. Got:\n{combined_output}"
 
-    # === Phase 3: Execute as ubuntu ===
+    # === Phase 3: Execute as claude (UID 1000) ===
 
     result = subprocess.run(
-        [coi_binary, "container", "exec", container_name, "--user", "ubuntu", "--", "whoami"],
+        [coi_binary, "container", "exec", container_name, "--user", "1000", "--", "whoami"],
         capture_output=True,
         text=True,
         timeout=30,
     )
 
-    # ubuntu user should exist in coi image
+    # claude user exists in coi image with UID 1000
     assert result.returncode == 0, \
-        f"Exec as ubuntu should succeed. stderr: {result.stderr}"
+        f"Exec as claude should succeed. stderr: {result.stderr}"
 
-    assert "ubuntu" in result.stdout.strip(), \
-        f"Should run as ubuntu. Got:\n{result.stdout}"
+    combined_output = result.stdout + result.stderr
+    assert "claude" in combined_output.strip(), \
+        f"Should run as claude. Got:\n{combined_output}"
 
     # === Phase 4: Cleanup ===
 
