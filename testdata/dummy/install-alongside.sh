@@ -1,13 +1,13 @@
 #!/bin/bash
-# Install dummy CLI ALONGSIDE real Claude for testing
+# Install fake Claude ALONGSIDE real Claude for testing
 # Real Claude: /usr/local/bin/claude (normal)
-# Dummy CLI: /usr/local/bin/test-claude (for tests)
+# Fake Claude: /usr/local/bin/test-claude (for tests)
 set -e
 
-echo "Installing test-claude (dummy CLI for testing)..."
+echo "Installing test-claude (fake Claude for testing)..."
 
-# Install dummy CLI as test-claude (alongside real claude)
-cp /workspace/testdata/dummy/claude /usr/local/bin/test-claude
+# Install fake Claude as test-claude (alongside real claude)
+cp /workspace/testdata/fake-claude/claude /usr/local/bin/test-claude
 chmod +x /usr/local/bin/test-claude
 
 # Create a wrapper script that chooses between them based on env var
