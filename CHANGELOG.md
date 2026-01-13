@@ -1,5 +1,9 @@
 # CHANGELOG
 
+## 0.3.1 (2026-01-13)
+
+Re-release of 0.3.0 with proper GitHub release automation.
+
 ## 0.3.0 (2026-01-13)
 
 Add machine-readable output formats to enable programmatic integration with claude_yard Ruby project.
