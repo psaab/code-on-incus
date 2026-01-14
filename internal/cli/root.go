@@ -9,7 +9,7 @@ import (
 
 const (
 	// Version is the current version of coi
-	Version = "0.3.3"
+	Version = "0.4.0"
 )
 
 var (

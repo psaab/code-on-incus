@@ -1,8 +1,8 @@
 # CHANGELOG
 
-## 0.3.3 (2026-01-14)
+## 0.4.0 (2026-01-14)
 
-Add domain allowlisting feature for network isolation, enabling high-security environments where containers can only communicate with approved domains.
+Add comprehensive network isolation with domain allowlisting and IP-based filtering, enabling high-security environments where containers can only communicate with approved domains.
 
 ### Features
 - [Feature] Domain allowlisting mode - Restrict container network access to only approved domains
@@ -25,10 +25,10 @@ Add domain allowlisting feature for network isolation, enabling high-security en
 - `network.refresh_interval_minutes = 30` - IP refresh interval (default: 30, 0 to disable)
 
 ### Documentation
-- [Documentation] Updated NETWORK.md with comprehensive allowlist mode documentation
-- [Documentation] Updated README.md with profile configuration examples
+- [Documentation] Updated README.md with network isolation modes and configuration
 - [Documentation] Added DNS failure handling and IP refresh behavior explanations
 - [Documentation] Documented security limitations and best practices
+- [Documentation] Simplified networking documentation for better accessibility
 
 ### Technical Details
 Allowlist implementation:
@@ -48,8 +48,9 @@ Allowlist implementation:
 - `internal/config/config.go` - Added `AllowedDomains`, `RefreshIntervalMinutes`, `NetworkModeAllowlist`
 - `internal/network/acl.go` - Added `CreateAllowlist()`, `buildAllowlistRules()`, `RecreateWithNewIPs()`
 - `internal/network/manager.go` - Added `setupAllowlist()`, `startRefresher()`, `stopRefresher()`, `refreshAllowedIPs()`
-- `NETWORK.md` - Added allowlist mode section with examples and limitations
-- `README.md` - Added profile-based network policy examples
+- `README.md` - Added network isolation section with all three modes
+- `.github/workflows/ci.yml` - Increased storage pool from 5GiB to 15GiB
+- `tests/meta/installation_smoke_test.py` - Added retry logic for transient network issues
 
 ## 0.3.2 (2026-01-14)
 
