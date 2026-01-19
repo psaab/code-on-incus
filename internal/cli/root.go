@@ -7,10 +7,8 @@ import (
 	"github.com/spf13/cobra"
 )
 
-const (
-	// Version is the current version of coi
-	Version = "0.5.0"
-)
+// Version is the current version of coi (injected via ldflags at build time)
+var Version = "dev"
 
 var (
 	// Global flags
