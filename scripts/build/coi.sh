@@ -141,12 +141,27 @@ WRAPPER_EOF
 }
 
 #######################################
-# Install Claude CLI from npm
+# Install Claude CLI using native installer
+# Note: npm installation is deprecated as of 2025
+# See: https://code.claude.com/docs/en/setup
 #######################################
 install_claude_cli() {
-    log "Installing Claude CLI..."
+    log "Installing Claude CLI (native)..."
 
-    npm install -g @anthropic-ai/claude-code
+    # Run the native installer as the code user
+    # This installs to ~/.local/bin/claude for that user
+    su - "$CODE_USER" -c 'curl -fsSL https://claude.ai/install.sh | bash'
+
+    # Verify that the installer actually created the Claude CLI binary
+    local CLAUDE_PATH="/home/$CODE_USER/.local/bin/claude"
+    if [[ ! -x "$CLAUDE_PATH" ]]; then
+        log "ERROR: Claude CLI binary not found at $CLAUDE_PATH after installation."
+        log "Installation may have failed or installed to an unexpected location."
+        exit 1
+    fi
+
+    # Create a global symlink so it's accessible system-wide
+    ln -sf "$CLAUDE_PATH" /usr/local/bin/claude
 
     log "Claude CLI $(claude --version 2>/dev/null || echo 'installed')"
 }
