@@ -5,10 +5,14 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net"
 	"os"
+	"os/exec"
+	"strings"
 	"time"
 
 	"github.com/mensfeld/code-on-incus/internal/config"
+	"github.com/mensfeld/code-on-incus/internal/container"
 )
 
 // errACLNotSupportedMessage is the user-facing error message when ACLs are not supported.
@@ -62,6 +66,13 @@ func NewManager(cfg *config.NetworkConfig) *Manager {
 func (m *Manager) SetupForContainer(ctx context.Context, containerName string) error {
 	m.containerName = containerName
 
+	// Ensure host can route to OVN networks (if applicable)
+	// This allows users to access container services from their host
+	if err := ensureHostRoute(containerName); err != nil {
+		// Log warning but don't fail - routing is a convenience feature
+		log.Printf("Warning: Could not configure host routing: %v", err)
+	}
+
 	// Handle different network modes
 	switch m.config.Mode {
 	case config.NetworkModeOpen:
@@ -87,7 +98,7 @@ func (m *Manager) setupRestricted(ctx context.Context, containerName string) err
 	m.aclName = fmt.Sprintf("coi-%s-restricted", containerName)
 
 	// 1. Create ACL with block rules
-	if err := m.acl.Create(m.aclName, m.config); err != nil {
+	if err := m.acl.Create(m.aclName, m.config, containerName); err != nil {
 		return fmt.Errorf("failed to create network ACL: %w", err)
 	}
 
@@ -146,6 +157,22 @@ func (m *Manager) setupAllowlist(ctx context.Context, containerName string) erro
 	domainIPs, err := m.resolver.ResolveAll(m.config.AllowedDomains)
 	if err != nil && len(domainIPs) == 0 {
 		return fmt.Errorf("failed to resolve any allowed domains: %w", err)
+	}
+
+	// 3a. Auto-detect and add gateway IP (required for routing)
+	gatewayIP, err := getContainerGatewayIP(containerName)
+	if err != nil {
+		log.Printf("Warning: Could not auto-detect gateway IP: %v", err)
+		log.Println("You may need to manually add the gateway IP to allowed_domains")
+	} else {
+		// Validate gateway IP before adding
+		if net.ParseIP(gatewayIP) == nil {
+			log.Printf("Warning: Invalid gateway IP detected: %s", gatewayIP)
+		} else {
+			// Add gateway IP to domainIPs map with internal key
+			domainIPs["__internal_gateway__"] = []string{gatewayIP}
+			log.Printf("Auto-detected gateway IP: %s", gatewayIP)
+		}
 	}
 
 	// Log resolution results
@@ -238,6 +265,20 @@ func (m *Manager) refreshAllowedIPs() error {
 		return fmt.Errorf("failed to resolve any domains")
 	}
 
+	// Re-add gateway IP (required for routing, must persist across refreshes)
+	gatewayIP, err := getContainerGatewayIP(m.containerName)
+	if err != nil {
+		log.Printf("Warning: Could not re-detect gateway IP during refresh: %v", err)
+	} else {
+		// Validate gateway IP before adding
+		if net.ParseIP(gatewayIP) == nil {
+			log.Printf("Warning: Invalid gateway IP detected during refresh: %s", gatewayIP)
+		} else {
+			newIPs["__internal_gateway__"] = []string{gatewayIP}
+			log.Printf("Re-added gateway IP during refresh: %s", gatewayIP)
+		}
+	}
+
 	// Check if anything changed
 	if m.resolver.IPsUnchanged(newIPs) {
 		log.Println("IP refresh: no changes detected")
@@ -306,4 +347,283 @@ func (m *Manager) Teardown(ctx context.Context, containerName string) error {
 // GetMode returns the current network mode
 func (m *Manager) GetMode() config.NetworkMode {
 	return m.config.Mode
+}
+
+// getContainerGatewayIP auto-detects the gateway IP for a container's network
+func getContainerGatewayIP(containerName string) (string, error) {
+	// Get container's network configuration from default profile
+	profileOutput, err := container.IncusOutput("profile", "device", "show", "default")
+	if err != nil {
+		return "", fmt.Errorf("failed to get default profile: %w", err)
+	}
+
+	// Parse network name from profile (eth0 device)
+	var networkName string
+	lines := strings.Split(profileOutput, "\n")
+	for i, line := range lines {
+		if strings.TrimSpace(line) == "eth0:" {
+			// Look for network: line
+			for j := i + 1; j < len(lines) && j < i+10; j++ {
+				if strings.Contains(lines[j], "network:") {
+					parts := strings.Split(lines[j], ":")
+					if len(parts) >= 2 {
+						networkName = strings.TrimSpace(parts[1])
+						break
+					}
+				}
+			}
+			break
+		}
+	}
+
+	if networkName == "" {
+		return "", fmt.Errorf("could not determine network name from profile")
+	}
+
+	// Get network configuration
+	networkOutput, err := container.IncusOutput("network", "show", networkName)
+	if err != nil {
+		return "", fmt.Errorf("failed to get network info: %w", err)
+	}
+
+	// Parse gateway IP (ipv4.address field)
+	for _, line := range strings.Split(networkOutput, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "ipv4.address:") {
+			addressWithMask := strings.TrimSpace(strings.TrimPrefix(line, "ipv4.address:"))
+			// Remove CIDR suffix (e.g., "10.128.178.1/24" -> "10.128.178.1")
+			gatewayIP := addressWithMask
+			if idx := strings.Index(addressWithMask, "/"); idx != -1 {
+				gatewayIP = addressWithMask[:idx]
+			}
+
+			// Validate that we extracted a valid IPv4 address
+			if net.ParseIP(gatewayIP) == nil {
+				return "", fmt.Errorf("invalid IPv4 address extracted: %s", gatewayIP)
+			}
+
+			return gatewayIP, nil
+		}
+	}
+
+	return "", fmt.Errorf("could not find ipv4.address in network %s", networkName)
+}
+
+// ensureHostRoute ensures the host can route to OVN networks
+// This allows users to access container services (web servers, databases, etc.) from their host
+func ensureHostRoute(containerName string) error {
+	// Get the network name for this container
+	networkName, err := getContainerNetworkName(containerName)
+	if err != nil {
+		return fmt.Errorf("failed to get network name: %w", err)
+	}
+
+	// Check if this is an OVN network
+	isOVN, err := isOVNNetwork(networkName)
+	if err != nil {
+		return fmt.Errorf("failed to check network type: %w", err)
+	}
+	if !isOVN {
+		// Not an OVN network, no routing needed
+		return nil
+	}
+
+	// Get OVN network configuration
+	subnet, err := getNetworkSubnet(networkName)
+	if err != nil {
+		return fmt.Errorf("failed to get OVN subnet: %w", err)
+	}
+
+	uplinkBridge, err := getOVNUplinkBridge(networkName)
+	if err != nil {
+		return fmt.Errorf("failed to get OVN uplink bridge: %w", err)
+	}
+
+	ovnUplinkIP, err := getOVNUplinkIP(networkName)
+	if err != nil {
+		return fmt.Errorf("failed to get OVN uplink IP: %w", err)
+	}
+
+	// Check if route already exists
+	if routeExists(subnet, ovnUplinkIP) {
+		log.Printf("Host route already configured: %s via %s", subnet, ovnUplinkIP)
+		return nil
+	}
+
+	// Try to add route
+	if err := addRoute(subnet, ovnUplinkIP, uplinkBridge); err != nil {
+		// Provide helpful message if we can't add route
+		log.Printf("ℹ️  OVN Network Routing")
+		log.Printf("")
+		log.Printf("Your container is on an OVN network (%s). To access services running", subnet)
+		log.Printf("in the container from your host machine (web servers, databases, etc.),")
+		log.Printf("you need to add a route. This is independent of the network mode.")
+		log.Printf("")
+		log.Printf("Run this command to enable host-to-container connectivity:")
+		log.Printf("  sudo ip route add %s via %s dev %s", subnet, ovnUplinkIP, uplinkBridge)
+		log.Printf("")
+		log.Printf("The route persists until reboot. COI automatically checks and re-adds it")
+		log.Printf("when starting containers. For fully automatic setup after reboot, either:")
+		log.Printf("  1. Configure passwordless sudo for 'ip route' (see README)")
+		log.Printf("  2. Add the route to your network configuration (netplan/systemd)")
+		log.Printf("")
+		return nil // Don't fail container startup
+	}
+
+	log.Printf("✓ OVN host route configured: %s via %s", subnet, ovnUplinkIP)
+	log.Printf("  Container services are accessible from your host machine")
+	return nil
+}
+
+// getContainerNetworkName retrieves the network name from the default profile
+func getContainerNetworkName(containerName string) (string, error) {
+	profileOutput, err := container.IncusOutput("profile", "device", "show", "default")
+	if err != nil {
+		return "", fmt.Errorf("failed to get default profile: %w", err)
+	}
+
+	lines := strings.Split(profileOutput, "\n")
+	for i, line := range lines {
+		if strings.TrimSpace(line) == "eth0:" {
+			for j := i + 1; j < len(lines) && j < i+10; j++ {
+				if strings.Contains(lines[j], "network:") {
+					parts := strings.Split(lines[j], ":")
+					if len(parts) >= 2 {
+						return strings.TrimSpace(parts[1]), nil
+					}
+				}
+			}
+			break
+		}
+	}
+
+	return "", fmt.Errorf("could not determine network name from profile")
+}
+
+// isOVNNetwork checks if a network is of type OVN
+func isOVNNetwork(networkName string) (bool, error) {
+	output, err := container.IncusOutput("network", "show", networkName)
+	if err != nil {
+		return false, fmt.Errorf("failed to get network info: %w", err)
+	}
+
+	lines := strings.Split(output, "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "type:") {
+			networkType := strings.TrimSpace(strings.TrimPrefix(line, "type:"))
+			return networkType == "ovn", nil
+		}
+	}
+
+	return false, nil
+}
+
+// getNetworkSubnet gets the IPv4 subnet of a network (e.g., "10.215.220.0/24")
+// It parses the ipv4.address (which is gateway IP + CIDR) and converts to network subnet
+func getNetworkSubnet(networkName string) (string, error) {
+	output, err := container.IncusOutput("network", "show", networkName)
+	if err != nil {
+		return "", fmt.Errorf("failed to get network info: %w", err)
+	}
+
+	lines := strings.Split(output, "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "ipv4.address:") {
+			addressWithCIDR := strings.TrimSpace(strings.TrimPrefix(line, "ipv4.address:"))
+
+			// Parse the CIDR notation (e.g., "10.128.178.1/24")
+			_, ipnet, err := net.ParseCIDR(addressWithCIDR)
+			if err != nil {
+				return "", fmt.Errorf("failed to parse CIDR %s: %w", addressWithCIDR, err)
+			}
+
+			// Return the network address (e.g., "10.128.178.0/24")
+			return ipnet.String(), nil
+		}
+	}
+
+	return "", fmt.Errorf("could not find ipv4.address in network config")
+}
+
+// getOVNUplinkBridge gets the uplink bridge name for an OVN network (e.g., "incusbr0")
+func getOVNUplinkBridge(networkName string) (string, error) {
+	output, err := container.IncusOutput("network", "show", networkName)
+	if err != nil {
+		return "", fmt.Errorf("failed to get network info: %w", err)
+	}
+
+	lines := strings.Split(output, "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "network:") {
+			return strings.TrimSpace(strings.TrimPrefix(line, "network:")), nil
+		}
+	}
+
+	return "", fmt.Errorf("could not find uplink network in OVN config")
+}
+
+// getOVNUplinkIP gets the OVN's uplink IP on the bridge (e.g., "10.47.62.100")
+// This is the IP the OVN network uses as its gateway on the uplink bridge
+func getOVNUplinkIP(networkName string) (string, error) {
+	output, err := container.IncusOutput("network", "show", networkName)
+	if err != nil {
+		return "", fmt.Errorf("failed to get network info: %w", err)
+	}
+
+	lines := strings.Split(output, "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "volatile.network.ipv4.address:") {
+			return strings.TrimSpace(strings.TrimPrefix(line, "volatile.network.ipv4.address:")), nil
+		}
+	}
+
+	return "", fmt.Errorf("could not find volatile.network.ipv4.address in OVN config")
+}
+
+// routeExists checks if a route already exists on the host
+func routeExists(subnet, gateway string) bool {
+	// Run 'ip route show' on the host (not inside container)
+	cmd := exec.Command("ip", "route", "show")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return false
+	}
+
+	// Look for a line like: "10.215.220.0/24 via 10.47.62.100 dev incusbr0"
+	lines := strings.Split(string(output), "\n")
+	for _, line := range lines {
+		if strings.Contains(line, subnet) && strings.Contains(line, gateway) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// addRoute adds a route to the routing table on the host
+func addRoute(subnet, gateway, bridge string) error {
+	// Try to add route using ip command on the host (not inside container)
+	// This requires either:
+	// 1. Running as root/sudo
+	// 2. Having CAP_NET_ADMIN capability
+	// 3. User having permissions via sudo NOPASSWD for ip command
+	cmdStr := fmt.Sprintf("ip route add %s via %s dev %s", subnet, gateway, bridge)
+
+	// Try with sudo first (non-interactive: -n)
+	cmd := exec.Command("sudo", "-n", "ip", "route", "add", subnet, "via", gateway, "dev", bridge)
+	if err := cmd.Run(); err == nil {
+		return nil
+	}
+
+	// Try without sudo (if running as root or with capabilities)
+	cmd = exec.Command("ip", "route", "add", subnet, "via", gateway, "dev", bridge)
+	if err := cmd.Run(); err == nil {
+		return nil
+	}
+
+	return fmt.Errorf("failed to add route (need sudo): %s", cmdStr)
 }

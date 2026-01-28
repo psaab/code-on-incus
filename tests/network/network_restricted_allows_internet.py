@@ -6,7 +6,7 @@ Tests that:
 2. Development workflows (npm, pypi, GitHub) work normally
 3. Only local/internal networks are blocked
 
-Note: This test requires OVN networking which is not available in CI.
+Note: This test requires OVN networking (now configured in CI).
 """
 
 import os
@@ -15,10 +15,10 @@ import time
 
 import pytest
 
-# Skip in CI - restricted mode requires OVN networking
+# Skip all tests in this module when running on bridge network (no OVN/ACL support)
 pytestmark = pytest.mark.skipif(
-    os.environ.get("CI") == "true" or os.environ.get("GITHUB_ACTIONS") == "true",
-    reason="Restricted network mode requires OVN networking (not available in CI)",
+    os.getenv("CI_NETWORK_TYPE") == "bridge",
+    reason="Restricted mode requires OVN networking (ACL support)",
 )
 
 
@@ -32,9 +32,17 @@ def test_restricted_allows_internet(coi_binary, workspace_dir, cleanup_container
     3. Verify connections succeed
     4. Cleanup container
     """
-    # Start shell in background
+    # Start shell in background with restricted network mode
     result = subprocess.run(
-        [coi_binary, "shell", "--workspace", workspace_dir, "--background", "--debug"],
+        [
+            coi_binary,
+            "shell",
+            "--workspace",
+            workspace_dir,
+            "--background",
+            "--debug",
+            "--network=restricted",
+        ],
         capture_output=True,
         text=True,
         timeout=60,

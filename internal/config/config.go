@@ -53,12 +53,13 @@ const (
 
 // NetworkConfig contains network isolation settings
 type NetworkConfig struct {
-	Mode                   NetworkMode          `toml:"mode"`
-	BlockPrivateNetworks   bool                 `toml:"block_private_networks"`
-	BlockMetadataEndpoint  bool                 `toml:"block_metadata_endpoint"`
-	AllowedDomains         []string             `toml:"allowed_domains"`
-	RefreshIntervalMinutes int                  `toml:"refresh_interval_minutes"`
-	Logging                NetworkLoggingConfig `toml:"logging"`
+	Mode                    NetworkMode          `toml:"mode"`
+	BlockPrivateNetworks    bool                 `toml:"block_private_networks"`
+	BlockMetadataEndpoint   bool                 `toml:"block_metadata_endpoint"`
+	AllowedDomains          []string             `toml:"allowed_domains"`
+	RefreshIntervalMinutes  int                  `toml:"refresh_interval_minutes"`
+	AllowLocalNetworkAccess bool                 `toml:"allow_local_network_access"` // Allow established connections from entire local network (not just gateway)
+	Logging                 NetworkLoggingConfig `toml:"logging"`
 }
 
 // NetworkLoggingConfig contains network logging settings
@@ -117,10 +118,19 @@ func GetDefaultConfig() *Config {
 			CodeUser: "code",
 		},
 		Network: NetworkConfig{
-			Mode:                   NetworkModeRestricted,
-			BlockPrivateNetworks:   true,
-			BlockMetadataEndpoint:  true,
-			AllowedDomains:         []string{},
+			Mode:                  NetworkModeRestricted,
+			BlockPrivateNetworks:  true,
+			BlockMetadataEndpoint: true,
+			AllowedDomains: []string{
+				// Default allowlist for allowlist mode (--network=allowlist)
+				// Note: Gateway IP is auto-detected and added automatically
+				"8.8.8.8",             // Google DNS (REQUIRED for DNS resolution)
+				"1.1.1.1",             // Cloudflare DNS (REQUIRED for DNS resolution)
+				"registry.npmjs.org",  // npm package registry
+				"npm.pkg.github.com",  // GitHub packages
+				"api.anthropic.com",   // Claude API
+				"platform.claude.com", // Claude Platform (OAuth, Console)
+			},
 			RefreshIntervalMinutes: 30,
 			Logging: NetworkLoggingConfig{
 				Enabled: true,
@@ -221,6 +231,7 @@ func (c *Config) Merge(other *Config) {
 	// This is imperfect in TOML but works for most cases
 	c.Network.BlockPrivateNetworks = other.Network.BlockPrivateNetworks
 	c.Network.BlockMetadataEndpoint = other.Network.BlockMetadataEndpoint
+	c.Network.AllowLocalNetworkAccess = other.Network.AllowLocalNetworkAccess
 
 	// Merge allowed domains (replace entirely if set)
 	if len(other.Network.AllowedDomains) > 0 {

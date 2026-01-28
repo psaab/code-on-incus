@@ -5,7 +5,7 @@ Tests that:
 1. Container cannot reach cloud metadata service at 169.254.169.254
 2. Prevents cloud credential exfiltration
 
-Note: This test requires OVN networking which is not available in CI.
+Note: This test requires OVN networking (now configured in CI).
 """
 
 import os
@@ -14,10 +14,10 @@ import time
 
 import pytest
 
-# Skip in CI - restricted mode requires OVN networking
+# Skip all tests in this module when running on bridge network (no OVN/ACL support)
 pytestmark = pytest.mark.skipif(
-    os.environ.get("CI") == "true" or os.environ.get("GITHUB_ACTIONS") == "true",
-    reason="Restricted network mode requires OVN networking (not available in CI)",
+    os.getenv("CI_NETWORK_TYPE") == "bridge",
+    reason="Restricted mode requires OVN networking (ACL support)",
 )
 
 
@@ -31,9 +31,17 @@ def test_restricted_blocks_metadata_endpoint(coi_binary, workspace_dir, cleanup_
     3. Verify connection is blocked/rejected
     4. Cleanup container
     """
-    # Start shell in background
+    # Start shell in background with restricted network mode
     result = subprocess.run(
-        [coi_binary, "shell", "--workspace", workspace_dir, "--background", "--debug"],
+        [
+            coi_binary,
+            "shell",
+            "--workspace",
+            workspace_dir,
+            "--background",
+            "--debug",
+            "--network=restricted",
+        ],
         capture_output=True,
         text=True,
         timeout=60,

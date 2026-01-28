@@ -19,41 +19,45 @@ func TestBuildACLRules_Restricted(t *testing.T) {
 			name:                  "block both private networks and metadata",
 			blockPrivateNetworks:  true,
 			blockMetadataEndpoint: true,
-			wantRuleCount:         5, // 1 allow + 3 RFC1918 + 1 metadata
+			wantRuleCount:         6, // 1 gateway allow + 3 RFC1918 + 1 metadata + 1 general allow
 			wantContains: []string{
-				"egress action=allow",
+				"egress action=allow destination=10.128.178.1/32",
 				"egress action=reject destination=10.0.0.0/8",
 				"egress action=reject destination=172.16.0.0/12",
 				"egress action=reject destination=192.168.0.0/16",
 				"egress action=reject destination=169.254.0.0/16",
+				"egress action=allow",
 			},
 		},
 		{
 			name:                  "block only private networks",
 			blockPrivateNetworks:  true,
 			blockMetadataEndpoint: false,
-			wantRuleCount:         4, // 1 allow + 3 RFC1918
+			wantRuleCount:         5, // 1 gateway allow + 3 RFC1918 + 1 general allow
 			wantContains: []string{
-				"egress action=allow",
+				"egress action=allow destination=10.128.178.1/32",
 				"egress action=reject destination=10.0.0.0/8",
+				"egress action=allow",
 			},
 		},
 		{
 			name:                  "block only metadata",
 			blockPrivateNetworks:  false,
 			blockMetadataEndpoint: true,
-			wantRuleCount:         2, // 1 allow + 1 metadata
+			wantRuleCount:         3, // 1 gateway allow + 1 metadata + 1 general allow
 			wantContains: []string{
-				"egress action=allow",
+				"egress action=allow destination=10.128.178.1/32",
 				"egress action=reject destination=169.254.0.0/16",
+				"egress action=allow",
 			},
 		},
 		{
 			name:                  "block nothing",
 			blockPrivateNetworks:  false,
 			blockMetadataEndpoint: false,
-			wantRuleCount:         1, // just allow
+			wantRuleCount:         2, // 1 gateway allow + 1 general allow
 			wantContains: []string{
+				"egress action=allow destination=10.128.178.1/32",
 				"egress action=allow",
 			},
 		},
@@ -67,7 +71,7 @@ func TestBuildACLRules_Restricted(t *testing.T) {
 				BlockMetadataEndpoint: tt.blockMetadataEndpoint,
 			}
 
-			rules := buildACLRules(cfg)
+			rules := buildACLRules(cfg, "10.128.178.1") // Test gateway IP
 
 			if len(rules) != tt.wantRuleCount {
 				t.Errorf("buildACLRules() returned %d rules, want %d", len(rules), tt.wantRuleCount)
@@ -96,7 +100,7 @@ func TestBuildACLRules_OpenMode(t *testing.T) {
 		BlockMetadataEndpoint: true,
 	}
 
-	rules := buildACLRules(cfg)
+	rules := buildACLRules(cfg, "10.128.178.1") // Test gateway IP
 
 	// Open mode should return no rules regardless of block settings
 	if len(rules) != 0 {
@@ -110,28 +114,17 @@ func TestBuildAllowlistRules(t *testing.T) {
 	}
 
 	domainIPs := map[string][]string{
-		"api.example.com": {"1.2.3.4", "5.6.7.8"},
-		"cdn.example.com": {"10.20.30.40"},
+		"api.example.com":      {"1.2.3.4", "5.6.7.8"},
+		"cdn.example.com":      {"10.20.30.40"},
+		"__internal_gateway__": {"10.128.178.1"}, // Add gateway for established connection rule
 	}
 
 	rules := buildAllowlistRules(cfg, domainIPs)
 
-	// Should have: 1 default-deny + 4 RFC1918/metadata blocks + 3 allowed IPs = 8 rules
-	expectedMinRules := 8
-	if len(rules) < expectedMinRules {
-		t.Errorf("buildAllowlistRules() returned %d rules, want at least %d", len(rules), expectedMinRules)
-	}
-
-	// Check for default-deny rule
-	foundDefaultDeny := false
-	for _, rule := range rules {
-		if rule == "egress action=reject destination=0.0.0.0/0" {
-			foundDefaultDeny = true
-			break
-		}
-	}
-	if !foundDefaultDeny {
-		t.Error("buildAllowlistRules() missing default-deny rule")
+	// Should have: 1 gateway allow + 3 allowed IPs (gateway excluded from regular allows) + 4 RFC1918/metadata blocks = 8 rules (no catch-all)
+	expectedRules := 8
+	if len(rules) != expectedRules {
+		t.Errorf("buildAllowlistRules() returned %d rules, want %d", len(rules), expectedRules)
 	}
 
 	// Check for allowed IPs
@@ -151,6 +144,27 @@ func TestBuildAllowlistRules(t *testing.T) {
 		}
 		if !found {
 			t.Errorf("buildAllowlistRules() missing expected allow rule: %s", want)
+		}
+	}
+
+	// Check for RFC1918 blocks
+	wantBlocks := []string{
+		"egress action=reject destination=10.0.0.0/8",
+		"egress action=reject destination=172.16.0.0/12",
+		"egress action=reject destination=192.168.0.0/16",
+		"egress action=reject destination=169.254.0.0/16",
+	}
+
+	for _, want := range wantBlocks {
+		found := false
+		for _, rule := range rules {
+			if rule == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("buildAllowlistRules() missing expected block rule: %s", want)
 		}
 	}
 }
@@ -175,14 +189,242 @@ func TestBuildAllowlistRules_EmptyDomains(t *testing.T) {
 		Mode: config.NetworkModeAllowlist,
 	}
 
-	domainIPs := map[string][]string{}
+	domainIPs := map[string][]string{
+		"__internal_gateway__": {"10.128.178.1"}, // Gateway for established connection rule
+	}
 
 	rules := buildAllowlistRules(cfg, domainIPs)
 
 	// Should still have the blocking rules even with no allowed domains
-	// 1 default-deny + 4 RFC1918/metadata blocks = 5 rules
+	// 1 gateway allow + 4 RFC1918/metadata blocks (no catch-all)
 	expectedRules := 5
 	if len(rules) != expectedRules {
 		t.Errorf("buildAllowlistRules() with empty domains returned %d rules, want %d", len(rules), expectedRules)
+	}
+}
+
+// TestBuildACLRules_LocalNetworkAccess tests the allow_local_network_access config
+func TestBuildACLRules_LocalNetworkAccess(t *testing.T) {
+	tests := []struct {
+		name                    string
+		allowLocalNetworkAccess bool
+		wantContains            []string
+		wantNotContains         []string
+	}{
+		{
+			name:                    "allow_local_network_access disabled (default)",
+			allowLocalNetworkAccess: false,
+			wantContains: []string{
+				"egress action=allow destination=10.128.178.1/32",
+				"egress action=reject destination=10.0.0.0/8",
+			},
+			wantNotContains: []string{
+				"egress action=allow destination=10.0.0.0/8",
+			},
+		},
+		{
+			name:                    "allow_local_network_access enabled",
+			allowLocalNetworkAccess: true,
+			wantContains: []string{
+				"egress action=allow destination=10.0.0.0/8",
+				"egress action=allow destination=172.16.0.0/12",
+				"egress action=allow destination=192.168.0.0/16",
+			},
+			wantNotContains: []string{
+				"egress action=reject destination=10.0.0.0/8",
+				"egress action=allow destination=10.128.178.1/32",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &config.NetworkConfig{
+				Mode:                    config.NetworkModeRestricted,
+				BlockPrivateNetworks:    true,
+				BlockMetadataEndpoint:   true,
+				AllowLocalNetworkAccess: tt.allowLocalNetworkAccess,
+			}
+
+			rules := buildACLRules(cfg, "10.128.178.1")
+
+			// Check for expected rules
+			for _, want := range tt.wantContains {
+				found := false
+				for _, rule := range rules {
+					if rule == want {
+						found = true
+						break
+					}
+				}
+				if !found {
+					t.Errorf("buildACLRules() missing expected rule: %s", want)
+				}
+			}
+
+			// Check that unwanted rules are not present
+			for _, unwant := range tt.wantNotContains {
+				for _, rule := range rules {
+					if rule == unwant {
+						t.Errorf("buildACLRules() should not contain rule: %s", unwant)
+					}
+				}
+			}
+		})
+	}
+}
+
+// TestBuildACLRules_RuleOrdering tests that REJECT rules come before ALLOW rules
+// This is critical for OVN which evaluates rules in order
+func TestBuildACLRules_RuleOrdering(t *testing.T) {
+	cfg := &config.NetworkConfig{
+		Mode:                  config.NetworkModeRestricted,
+		BlockPrivateNetworks:  true,
+		BlockMetadataEndpoint: true,
+	}
+
+	rules := buildACLRules(cfg, "10.128.178.1") // Test gateway IP
+
+	// Find indices of first reject and first allow
+	firstRejectIdx := -1
+	firstAllowIdx := -1
+
+	for i, rule := range rules {
+		if firstRejectIdx == -1 && (rule == "egress action=reject destination=10.0.0.0/8" ||
+			rule == "egress action=reject destination=172.16.0.0/12" ||
+			rule == "egress action=reject destination=192.168.0.0/16" ||
+			rule == "egress action=reject destination=169.254.0.0/16") {
+			firstRejectIdx = i
+		}
+		if firstAllowIdx == -1 && rule == "egress action=allow" {
+			firstAllowIdx = i
+		}
+	}
+
+	if firstRejectIdx == -1 {
+		t.Error("No reject rules found in restricted mode")
+	}
+	if firstAllowIdx == -1 {
+		t.Error("No allow rule found in restricted mode")
+	}
+
+	// CRITICAL: Reject rules must come BEFORE allow rules
+	// This was the bug - OVN evaluates rules in order
+	if firstRejectIdx > firstAllowIdx {
+		t.Errorf("Rule ordering bug: REJECT rules (index %d) come after ALLOW rules (index %d). "+
+			"OVN evaluates rules in order, so REJECT must come first.",
+			firstRejectIdx, firstAllowIdx)
+	}
+}
+
+// TestBuildAllowlistRules_RuleOrdering tests that ALLOW rules come before REJECT rules
+// This is critical for allowlist mode to work correctly
+func TestBuildAllowlistRules_RuleOrdering(t *testing.T) {
+	cfg := &config.NetworkConfig{
+		Mode: config.NetworkModeAllowlist,
+	}
+
+	domainIPs := map[string][]string{
+		"api.example.com": {"1.2.3.4"},
+	}
+
+	rules := buildAllowlistRules(cfg, domainIPs)
+
+	// Find indices of first allow and first reject
+	firstAllowIdx := -1
+	firstRejectIdx := -1
+
+	for i, rule := range rules {
+		if firstAllowIdx == -1 && rule == "egress action=allow destination=1.2.3.4/32" {
+			firstAllowIdx = i
+		}
+		if firstRejectIdx == -1 && (rule == "egress action=reject destination=10.0.0.0/8" ||
+			rule == "egress action=reject destination=172.16.0.0/12" ||
+			rule == "egress action=reject destination=192.168.0.0/16" ||
+			rule == "egress action=reject destination=169.254.0.0/16") {
+			firstRejectIdx = i
+		}
+	}
+
+	if firstAllowIdx == -1 {
+		t.Error("No allow rules found in allowlist mode")
+	}
+	if firstRejectIdx == -1 {
+		t.Error("No reject rules found in allowlist mode")
+	}
+
+	// CRITICAL: Allow rules must come BEFORE reject rules in allowlist mode
+	// This ensures allowed IPs can be reached before they're blocked by RFC1918 rules
+	if firstAllowIdx > firstRejectIdx {
+		t.Errorf("Rule ordering bug: ALLOW rules (index %d) come after REJECT rules (index %d). "+
+			"OVN evaluates rules in order, so ALLOW must come first in allowlist mode.",
+			firstAllowIdx, firstRejectIdx)
+	}
+}
+
+// TestBuildAllowlistRules_IPDeduplication tests that duplicate IPs are handled correctly
+// Multiple domains can resolve to the same IP (e.g., api.anthropic.com and platform.anthropic.com)
+func TestBuildAllowlistRules_IPDeduplication(t *testing.T) {
+	cfg := &config.NetworkConfig{
+		Mode: config.NetworkModeAllowlist,
+	}
+
+	// Simulate multiple domains resolving to same IP
+	domainIPs := map[string][]string{
+		"api.example.com":      {"160.79.104.10"},
+		"platform.example.com": {"160.79.104.10"}, // Same IP as api
+		"other.example.com":    {"1.2.3.4"},
+	}
+
+	rules := buildAllowlistRules(cfg, domainIPs)
+
+	// Count how many times the duplicate IP appears in rules
+	duplicateIPCount := 0
+	targetRule := "egress action=allow destination=160.79.104.10/32"
+	uniqueIPCount := 0
+	uniqueRule := "egress action=allow destination=1.2.3.4/32"
+
+	for _, rule := range rules {
+		if rule == targetRule {
+			duplicateIPCount++
+		}
+		if rule == uniqueRule {
+			uniqueIPCount++
+		}
+	}
+
+	// Should appear exactly once, not twice
+	if duplicateIPCount != 1 {
+		t.Errorf("IP deduplication failed: found %d rules for 160.79.104.10, want 1", duplicateIPCount)
+		t.Logf("Rules: %v", rules)
+	}
+
+	// Unique IP should also be present
+	if uniqueIPCount != 1 {
+		t.Errorf("Unique IP missing: found %d rules for 1.2.3.4, want 1", uniqueIPCount)
+		t.Logf("Rules: %v", rules)
+	}
+}
+
+// TestBuildAllowlistRules_NoCatchAllReject verifies we don't have an explicit catch-all reject
+// OVN applies implicit default-deny when ACLs are attached to a NIC, so we don't need
+// an explicit 0.0.0.0/0 reject rule (which would interfere with OVN routing)
+func TestBuildAllowlistRules_NoCatchAllReject(t *testing.T) {
+	cfg := &config.NetworkConfig{
+		Mode: config.NetworkModeAllowlist,
+	}
+
+	domainIPs := map[string][]string{
+		"api.example.com": {"1.2.3.4"},
+	}
+
+	rules := buildAllowlistRules(cfg, domainIPs)
+
+	// Should NOT have a catch-all reject rule
+	for _, rule := range rules {
+		if rule == "egress action=reject destination=0.0.0.0/0" {
+			t.Error("Found catch-all reject rule which interferes with OVN routing")
+			t.Logf("Rules: %v", rules)
+		}
 	}
 }
