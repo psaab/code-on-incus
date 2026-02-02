@@ -902,6 +902,76 @@ This protection is most important when:
 
 **Note:** COI sandboxes already protect your host environment from malicious code execution. This guidance is specifically about preventing hooks from running when you commit AI-generated changes from your host shell.
 
+## System Health Check
+
+Use `coi health` to diagnose setup issues and verify your environment is correctly configured:
+
+```bash
+# Basic health check
+coi health
+
+# JSON output for scripting/automation
+coi health --format json
+
+# Verbose output with additional checks
+coi health --verbose
+```
+
+**Example output:**
+```
+Code on Incus Health Check
+==========================
+
+SYSTEM:
+  [OK]   Operating system   Ubuntu 24.04.3 LTS (amd64)
+
+CRITICAL:
+  [OK]   Incus              Running (version 6.20)
+  [OK]   Permissions        User in incus-admin group
+  [OK]   Default image      coi (fingerprint: 1bf24b3a67...)
+  [OK]   Image age          2 days old
+
+NETWORKING:
+  [OK]   Network bridge     incusbr0 (10.128.178.1/24)
+  [OK]   IP forwarding      Enabled
+  [OK]   Firewalld          Running (restricted mode available)
+
+STORAGE:
+  [OK]   COI directory      ~/.coi (writable)
+  [OK]   Sessions dir       ~/.coi/sessions-claude (writable)
+  [OK]   Disk space         455.0 GB available
+
+CONFIGURATION:
+  [OK]   Config loaded      ~/.config/coi/config.toml
+  [OK]   Network mode       restricted
+  [OK]   Tool               claude
+
+STATUS:
+  [OK]   Containers         1 running
+  [OK]   Saved sessions     12 session(s)
+
+STATUS: HEALTHY
+All 16 checks passed
+```
+
+**Exit codes:**
+- `0` = healthy (all checks pass)
+- `1` = degraded (warnings but functional)
+- `2` = unhealthy (critical failures)
+
+**What's checked:**
+| Category | Checks |
+|----------|--------|
+| **System** | OS info, Colima/Lima detection |
+| **Critical** | Incus availability, group permissions, default image, image age |
+| **Networking** | Network bridge, IP forwarding, firewalld (mode-aware) |
+| **Storage** | COI directory, sessions directory, disk space (warns if <5GB) |
+| **Configuration** | Config files, network mode, tool |
+| **Status** | Running containers, saved sessions |
+| **Optional** | DNS resolution, passwordless sudo (with `--verbose`) |
+
+**Colima/Lima detection:** When running inside a Colima or Lima VM, the health check automatically detects this and shows `[colima]` in the OS info. If firewalld is not available, it provides Colima-specific guidance.
+
 ## Troubleshooting
 
 ### DNS Issues During Build
