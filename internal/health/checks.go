@@ -28,6 +28,8 @@ func CheckOS() HealthCheck {
 
 	// Try to get more detailed OS info on Linux
 	var details string
+	var environment string
+
 	if osName == "linux" {
 		// Try to read /etc/os-release for distribution info
 		if content, err := os.ReadFile("/etc/os-release"); err == nil {
@@ -43,6 +45,11 @@ func CheckOS() HealthCheck {
 				details = prettyName
 			}
 		}
+
+		// Detect if running in Colima/Lima VM
+		if isColimaEnvironment() {
+			environment = "colima"
+		}
 	} else if osName == "darwin" {
 		// Get macOS version
 		cmd := exec.Command("sw_vers", "-productVersion")
@@ -55,17 +62,40 @@ func CheckOS() HealthCheck {
 	if details != "" {
 		message = fmt.Sprintf("%s (%s)", details, arch)
 	}
+	if environment != "" {
+		message += fmt.Sprintf(" [%s]", environment)
+	}
 
 	return HealthCheck{
 		Name:    "os",
 		Status:  StatusOK,
 		Message: message,
 		Details: map[string]interface{}{
-			"os":      osName,
-			"arch":    arch,
-			"details": details,
+			"os":          osName,
+			"arch":        arch,
+			"details":     details,
+			"environment": environment,
 		},
 	}
+}
+
+// isColimaEnvironment detects if running inside a Colima/Lima VM
+func isColimaEnvironment() bool {
+	// Check for virtiofs mounts (characteristic of Lima VMs)
+	if content, err := os.ReadFile("/proc/mounts"); err == nil {
+		if strings.Contains(string(content), "virtiofs") {
+			return true
+		}
+	}
+
+	// Check for lima user
+	if currentUser, err := user.Current(); err == nil {
+		if currentUser.Username == "lima" {
+			return true
+		}
+	}
+
+	return false
 }
 
 // CheckIncus verifies that Incus is available and running
@@ -354,6 +384,7 @@ func CheckIPForwarding() HealthCheck {
 // CheckFirewall verifies firewalld availability based on network mode
 func CheckFirewall(mode config.NetworkMode) HealthCheck {
 	available := network.FirewallAvailable()
+	isColima := isColimaEnvironment()
 
 	if mode == config.NetworkModeOpen {
 		// Firewall not required for open mode
@@ -373,10 +404,17 @@ func CheckFirewall(mode config.NetworkMode) HealthCheck {
 
 	// Required for restricted/allowlist modes
 	if !available {
+		message := fmt.Sprintf("Not available (required for %s mode)", mode)
+		if isColima {
+			message = "Not available - use --network=open for Colima"
+		}
 		return HealthCheck{
 			Name:    "firewall",
 			Status:  StatusFailed,
-			Message: fmt.Sprintf("Not available (required for %s mode)", mode),
+			Message: message,
+			Details: map[string]interface{}{
+				"colima": isColima,
+			},
 		}
 	}
 
