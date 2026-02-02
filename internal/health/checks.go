@@ -20,6 +20,54 @@ import (
 	"github.com/mensfeld/code-on-incus/internal/tool"
 )
 
+// CheckOS reports the operating system information
+func CheckOS() HealthCheck {
+	// Get OS and architecture
+	osName := runtime.GOOS
+	arch := runtime.GOARCH
+
+	// Try to get more detailed OS info on Linux
+	var details string
+	if osName == "linux" {
+		// Try to read /etc/os-release for distribution info
+		if content, err := os.ReadFile("/etc/os-release"); err == nil {
+			lines := strings.Split(string(content), "\n")
+			var prettyName string
+			for _, line := range lines {
+				if strings.HasPrefix(line, "PRETTY_NAME=") {
+					prettyName = strings.Trim(strings.TrimPrefix(line, "PRETTY_NAME="), "\"")
+					break
+				}
+			}
+			if prettyName != "" {
+				details = prettyName
+			}
+		}
+	} else if osName == "darwin" {
+		// Get macOS version
+		cmd := exec.Command("sw_vers", "-productVersion")
+		if output, err := cmd.Output(); err == nil {
+			details = "macOS " + strings.TrimSpace(string(output))
+		}
+	}
+
+	message := fmt.Sprintf("%s/%s", osName, arch)
+	if details != "" {
+		message = fmt.Sprintf("%s (%s)", details, arch)
+	}
+
+	return HealthCheck{
+		Name:    "os",
+		Status:  StatusOK,
+		Message: message,
+		Details: map[string]interface{}{
+			"os":      osName,
+			"arch":    arch,
+			"details": details,
+		},
+	}
+}
+
 // CheckIncus verifies that Incus is available and running
 func CheckIncus() HealthCheck {
 	// Check if incus binary exists

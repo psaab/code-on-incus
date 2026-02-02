@@ -52,6 +52,9 @@ type HealthSummary struct {
 func RunAllChecks(cfg *config.Config, verbose bool) *HealthResult {
 	checks := make(map[string]HealthCheck)
 
+	// System checks
+	checks["os"] = CheckOS()
+
 	// Critical checks
 	checks["incus"] = CheckIncus()
 	checks["permissions"] = CheckPermissions()

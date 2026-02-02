@@ -88,6 +88,7 @@ func outputHealthText(result *health.HealthResult) error {
 
 	// Group checks by category
 	categories := map[string][]string{
+		"SYSTEM":        {"os"},
 		"CRITICAL":      {"incus", "permissions", "image", "image_age"},
 		"NETWORKING":    {"network_bridge", "ip_forwarding", "firewall"},
 		"STORAGE":       {"coi_directory", "sessions_directory", "disk_space"},
@@ -97,7 +98,7 @@ func outputHealthText(result *health.HealthResult) error {
 	}
 
 	// Category order
-	categoryOrder := []string{"CRITICAL", "NETWORKING", "STORAGE", "CONFIGURATION", "STATUS", "OPTIONAL"}
+	categoryOrder := []string{"SYSTEM", "CRITICAL", "NETWORKING", "STORAGE", "CONFIGURATION", "STATUS", "OPTIONAL"}
 
 	for _, category := range categoryOrder {
 		checkNames := categories[category]
@@ -201,6 +202,7 @@ func outputHealthText(result *health.HealthResult) error {
 func formatCheckName(name string) string {
 	// Special cases for better display
 	specialCases := map[string]string{
+		"os":                 "Operating system",
 		"incus":              "Incus",
 		"permissions":        "Permissions",
 		"image":              "Default image",
