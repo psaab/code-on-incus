@@ -311,6 +311,14 @@ func copyDirRecursive(src, dst string) error {
 		srcPath := filepath.Join(src, entry.Name())
 		dstPath := filepath.Join(dst, entry.Name())
 
+		// Handle symlinks
+		if entry.Type()&os.ModeSymlink != 0 {
+			if err := copySymlink(srcPath, dstPath); err != nil {
+				return err
+			}
+			continue
+		}
+
 		if entry.IsDir() {
 			if err := copyDirRecursive(srcPath, dstPath); err != nil {
 				return err
@@ -323,6 +331,15 @@ func copyDirRecursive(src, dst string) error {
 	}
 
 	return nil
+}
+
+// copySymlink copies a symbolic link from src to dst
+func copySymlink(src, dst string) error {
+	link, err := os.Readlink(src)
+	if err != nil {
+		return err
+	}
+	return os.Symlink(link, dst)
 }
 
 // copyFile copies a single file from src to dst
