@@ -270,10 +270,22 @@ func (m *Manager) PullDirectory(containerPath, localPath string) error {
 	os.RemoveAll(localPath)
 
 	// Rename (move) the pulled directory to the final location
-	// If rename fails with cross-device error, fall back to copy+delete
+	// If rename fails with cross-device error, fall back to copy via a temp dir
 	if err := os.Rename(pulledDir, localPath); err != nil {
 		if isCrossDeviceError(err) {
-			return copyDirRecursive(pulledDir, localPath)
+			// Create a temporary directory on the same filesystem as localPath
+			tempDestDir, err := os.MkdirTemp(filepath.Dir(localPath), "coi-pull-*")
+			if err != nil {
+				return err
+			}
+			defer os.RemoveAll(tempDestDir)
+
+			// Copy into a temp target, then atomically rename to the final location
+			tempTarget := filepath.Join(tempDestDir, filepath.Base(localPath))
+			if err := copyDirRecursive(pulledDir, tempTarget); err != nil {
+				return err
+			}
+			return os.Rename(tempTarget, localPath)
 		}
 		return err
 	}
@@ -359,10 +371,15 @@ func copyFile(src, dst string) error {
 	if err != nil {
 		return err
 	}
-	defer dstFile.Close()
 
-	_, err = io.Copy(dstFile, srcFile)
-	return err
+	if _, err = io.Copy(dstFile, srcFile); err != nil {
+		// Best-effort close; prefer the copy error if both occur.
+		_ = dstFile.Close()
+		return err
+	}
+
+	// Propagate any error that occurs while flushing/closing the writable file.
+	return dstFile.Close()
 }
 
 // PushDirectory pushes a directory to the container recursively
